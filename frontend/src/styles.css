@@ -1,0 +1,61 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-canvas: #0a0d12;
+  --color-panel: #11161e;
+  --color-elevated: #171d27;
+  --color-line: #27303c;
+  --color-muted: #8b96a6;
+  --color-mint: #b7f37c;
+  --color-cyan: #69d5e8;
+  --color-violet: #b4a2f7;
+  --font-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Space Grotesk', 'DM Sans', sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+  font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  background: #0a0d12;
+  color: #f4f4f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: #0a0d12;
+}
+
+::selection {
+  color: #0a0d12;
+  background: #b7f37c;
+}
+
+.eyebrow {
+  color: #b7f37c;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.field-label {
+  color: #d8dee8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

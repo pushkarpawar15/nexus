@@ -1,0 +1,78 @@
+# NEXUS architecture
+
+## Current implementation
+
+The rebuilt backend is the `backend/app` package. It has validated configuration, Firebase ID-token authentication and role checks, GitHub App installation and repository allowlisting, task-scoped attachments, task CRUD, analysis, evidence-based workflow transitions, execution orchestration, report/history APIs, admin approvals, and GitHub pull request publication. Firestore and test-memory adapters persist task and workflow records. The earlier `backend/nexus_backend` sample remains for its existing tests; the documented server entry point is `app.main:create_app`.
+
+The React/Vite app has the workflow routes, Firebase sign-in and role context, authenticated API calls, responsive navigation, task intake and attachment controls, evidence and activity views, repository management, approval and execution actions. The screen gates follow server-provided capabilities and current task evidence.
+
+## Target architecture
+
+| Area | Component | Responsibility |
+| --- | --- | --- |
+| Web app | React + TypeScript + Vite, Firebase Hosting | Task intake, execution progress, evidence, approval and review experience. |
+| API | Python + FastAPI, Cloud Run | Authentication, configuration, task intake, workflow coordination and status reads. |
+| Model access | Gemini through Vertex AI or Gemini API | Structured analysis, contextual security findings, and Antigravity coding. |
+| Agent orchestration | NEXUS workflow services, LangGraph and Antigravity SDK | NEXUS services own task transitions and side effects; LangGraph checkpoints human-input interrupts; Antigravity returns bounded file operations with built-in system tools disabled. |
+| Durable workflow state | Firestore | Tasks, executions, activity, validation/security reports, approvals, PR records and LangGraph checkpoints. |
+| Coding and validation | Isolated local worker and prebuilt Docker validators | Disposable workspaces, bounded checks, actual test evidence. |
+| PR publication | GitHub App and GitHub API | Publish approved, validated changes to repositories selected during installation. |
+| Task attachments | Local private storage or Google Cloud Storage | Store bounded attachments and provide authorized download and model access. |
+| Credentials | ADC, service identity and backend-only GitHub App secrets | Keep credentials out of source and browser bundles. |
+
+Incident Investigator is deferred and excluded from the initial workflow.
+
+## Persistence collections
+
+The Firestore adapters use these top-level collection names:
+
+| Collection | Record |
+| --- | --- |
+| `tasks` | Task state, analysis and transition history. |
+| `executions` | Execution attempts. |
+| `activity_events` | Task and worker activity. |
+| `validation_reports` | Command results and patch fingerprint. |
+| `security_reviews` | Static/model findings and patch fingerprint. |
+| `approvals` | Immutable, patch-specific human decisions. |
+| `pull_requests` | Commit, push and confirmed PR checkpoints. |
+| `langgraph_checkpoints` | Checkpoints for operator-input interrupts and resumes, partitioned by execution thread. |
+
+The app factory selects Firestore explicitly outside test mode. A Firestore connectivity failure is surfaced by `/api/ready`; it never falls back to memory. Memory adapters are restricted to `NEXUS_ENV=testing`.
+
+## Repair and human-input flow
+
+- **Analysis proposal rejected:** one repair follows the initial proposal. A second invalid result records the rejection reason and asks an operator to clarify scope; the answer is sent to the planner for re-analysis.
+- **Coding proposal rejected:** two repairs follow the initial proposal. A coding error or exhausted repair count asks for operator guidance. A live worker applies it in the same workspace; if the worker already stopped, the answer starts a fresh isolated execution.
+- **Validation fails:** up to three code repairs run, each followed by validation. At the limit, the task asks for guidance and continues the repair loop after the answer.
+- **Security findings:** up to two code repairs run, with fresh validation and security review each time. At the limit, the task asks for guidance, then returns through coding, validation, and security review.
+- **Security review cannot complete:** the task shows the review reason and asks an operator to resolve the reported issue or request another review.
+- **Workspace or repository setup fails:** the worker reports the setup error and blocks execution. After credentials or configuration are fixed, an operator can retry.
+- **PR publication fails:** publication retries three times using its saved GitHub checkpoint. After that, the task page offers a manual PR retry; code is not silently marked as published.
+- **Approval is required:** validation and security must pass first. The existing admin approval gate remains in place before PR creation.
+
+After a bounded repair window, the task enters `AWAITING_INPUT`. The task page shows the question and related validation or security evidence. An operator answer is saved as coder guidance and shown in activity details. For an active local worker, LangGraph pauses at an interrupt and checkpoints it in Firestore; the answer resumes the same execution and workspace. If the local worker stops, the answer starts a fresh execution because an uncommitted local workspace cannot survive process shutdown.
+
+The workflow activity and typed task/execution records remain the user-facing evidence. LangGraph checkpoints store execution-control state, not a replacement for those records.
+
+## Trust boundaries
+
+1. The API accepts task text and a repository key, never a clone URL or shell command.
+2. `APPROVED_REPOSITORIES` maps the key to the server-selected owner/repository. Local source checkouts must be verified against that allowlist before cloning.
+3. Gemini recommendations are typed and remain subject to deterministic policy. Model output cannot grant permissions or approve work.
+4. Coding runs in a disposable workspace separated from the NEXUS checkout and target checkout.
+5. Validation uses fixed argv arrays inside prebuilt images with no network, nonroot users, dropped capabilities, no-new-privileges, read-only source mounts, bounded resources and command timeouts. Missing images and failed commands block the workflow.
+6. Security findings and approval decisions refer to the patch fingerprint. Approvals are append-only.
+7. GitHub publication is backend-only, allowlisted, URL-verified and idempotent. The browser never receives `GITHUB_TOKEN`.
+
+## Local and hosted boundaries
+
+Local examples select the Auth and Firestore emulators and leave coding/validation disabled. Local coding requires a private workspace root, validator images and explicit policy permissions. A Gemini API key can be used locally while GCP billing is unavailable.
+
+The Cloud Run image supports the API and Firestore readiness check. This version does not include a durable queue, isolated hosted worker or durable workspace handoff. Production configuration rejects memory storage, emulator hosts and enabled coding/validation flags. Production task attachments require a private GCS bucket. A deployment must not be represented as having run coding, validation, security review or PR creation.
+
+## Delivery limits
+
+- Gemini and GitHub integrations need valid project credentials and were not exercised against real external services during local verification.
+- Coding and validation are disabled in the sample environment. Enabling them requires a separate PayFlow checkout, Docker validator images, Vertex AI ADC, and a private workspace directory.
+- The dispatcher is an in-process local worker. Hosted Cloud Run execution remains disabled until a durable queue and isolated worker handoff are provided.
+- Firebase Hosting and Firestore rules are configured, but no cloud resources have been provisioned or deployed by this reconstruction.
