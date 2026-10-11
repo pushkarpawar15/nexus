@@ -415,7 +415,11 @@ def validate_settings(settings: Settings) -> None:
         raise ConfigurationError("WORKSPACE_ROOT is required when local execution is enabled.")
     if settings.workspace_root is not None:
         workspace = settings.workspace_root.resolve()
-        protected_paths = [Path(__file__).resolve().parents[3]]
+        # In the source checkout this module is four levels below the repo root,
+        # while the container installs it under /app/app/core. parents[3] is
+        # therefore the filesystem root (/) in Cloud Run and would reject every
+        # valid workspace beneath /tmp. Protect the installed application root.
+        protected_paths = [Path(__file__).resolve().parents[2]]
         protected_paths.extend(
             target.source_path.resolve()
             for target in settings.approved_repositories.values()

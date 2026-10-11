@@ -92,6 +92,13 @@ class CloudRunJobsDispatcher:
             operation = result.json()
             if operation.get("done"):
                 if operation.get("error"):
+                    # Cloud Run may finish the run operation with an execution
+                    # error when the container exits during startup. If it
+                    # created the execution, dispatch was accepted; the worker
+                    # must report its own failure through the execution record.
+                    name = self._find_execution(session, execution_id)
+                    if name:
+                        return name
                     raise RuntimeError("Cloud Run could not start the execution job.")
                 response_data = operation.get("response") or {}
                 metadata = operation.get("metadata") or {}

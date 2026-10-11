@@ -1,0 +1,40 @@
+serviceAccount: projects/${PROJECT_ID}/serviceAccounts/nexus-build@${PROJECT_ID}.iam.gserviceaccount.com
+steps:
+  - name: alpine/git:latest
+    entrypoint: sh
+    secretEnv: [GH_PAT]
+    args:
+      - -c
+      - |
+        set -eu
+        AUTH="$(printf 'x-access-token:%s' "$${GH_PAT}" | base64 | tr -d '\n')"
+        git -c "http.https://github.com/.extraheader=Authorization: Basic $${AUTH}" \
+          clone --depth=1 "https://github.com/${_GITHUB_REPOSITORY}.git" /workspace/target
+  - name: python:3.12-slim
+    entrypoint: python
+    args:
+      - /workspace/validation_images/prepare_cloud_contexts.py
+      - /workspace/target
+      - /workspace/validator-contexts
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_PYTHON_IMAGE}
+      - /workspace/validator-contexts/python
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_NODE_IMAGE}
+      - /workspace/validator-contexts/node
+images:
+  - ${_PYTHON_IMAGE}
+  - ${_NODE_IMAGE}
+timeout: 1200s
+options:
+  logging: CLOUD_LOGGING_ONLY
+availableSecrets:
+  secretManager:
+    - versionName: projects/${PROJECT_ID}/secrets/nexus-github-token/versions/latest
+      env: GH_PAT
