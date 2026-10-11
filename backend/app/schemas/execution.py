@@ -64,6 +64,7 @@ class ExecutionRecord(UtcTimestampModel):
     branch_reference: Annotated[str, StringConstraints(max_length=300)] | None = None
     repository_key: Annotated[str, StringConstraints(min_length=1, max_length=150)] | None = None
     model_id: Annotated[str, StringConstraints(min_length=1, max_length=120)] | None = None
+    cloud_execution_name: Annotated[str, StringConstraints(max_length=1000)] | None = None
     base_commit_sha: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{7,64}$")] | None = None
     patch_fingerprint: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
     patch_summary: Annotated[str, StringConstraints(max_length=4000)] | None = None

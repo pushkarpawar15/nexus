@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["development", "testing", "production"]
 StorageMode = Literal["firestore", "memory"]
+ExecutionBackend = Literal["local", "cloud_run_jobs"]
 _REPOSITORY_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,149}$")
 _PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 _EMULATOR_HOST = re.compile(r"^(?:localhost|[A-Za-z0-9.-]+)(?::[0-9]{1,5})?$")
@@ -146,6 +147,56 @@ class Settings(BaseSettings):
     validation_enabled: bool = Field(
         default=False,
         validation_alias=AliasChoices("NEXUS_VALIDATION_ENABLED", "validation_enabled"),
+    )
+    execution_backend: ExecutionBackend = Field(
+        default="local",
+        validation_alias=AliasChoices("NEXUS_EXECUTION_BACKEND", "execution_backend"),
+    )
+    cloud_run_job_name: str = Field(
+        default="nexus-execution-worker",
+        validation_alias=AliasChoices("CLOUD_RUN_EXECUTION_JOB", "cloud_run_job_name"),
+    )
+    cloud_run_region: str = Field(
+        default="asia-south1",
+        validation_alias=AliasChoices("CLOUD_RUN_EXECUTION_REGION", "cloud_run_region"),
+    )
+    cloud_run_execution_timeout_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=604800,
+        validation_alias=AliasChoices(
+            "CLOUD_RUN_EXECUTION_TIMEOUT_SECONDS", "cloud_run_execution_timeout_seconds"
+        ),
+    )
+    cloud_build_service_account: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CLOUD_BUILD_VALIDATION_SERVICE_ACCOUNT", "cloud_build_service_account"
+        ),
+    )
+    cloud_build_service_agent: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CLOUD_BUILD_SERVICE_AGENT", "cloud_build_service_agent"
+        ),
+    )
+    cloud_build_worker_pool: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CLOUD_BUILD_WORKER_POOL", "cloud_build_worker_pool"),
+    )
+    cloud_build_validation_location: str = Field(
+        default="asia-south1",
+        validation_alias=AliasChoices(
+            "CLOUD_BUILD_VALIDATION_LOCATION", "cloud_build_validation_location"
+        ),
+    )
+    cloud_build_timeout_seconds: int = Field(
+        default=1200,
+        ge=60,
+        le=3600,
+        validation_alias=AliasChoices(
+            "CLOUD_BUILD_VALIDATION_TIMEOUT_SECONDS", "cloud_build_timeout_seconds"
+        ),
     )
     workspace_root: Path | None = Field(
         default=None, validation_alias=AliasChoices("WORKSPACE_ROOT", "workspace_root")
@@ -324,13 +375,43 @@ def validate_settings(settings: Settings) -> None:
             )
         if settings.firestore_emulator_host or settings.firebase_auth_emulator_host:
             raise ConfigurationError("Emulators must not be enabled in production.")
-        if settings.coding_enabled or settings.validation_enabled:
+        if settings.coding_enabled != settings.validation_enabled:
             raise ConfigurationError(
-                "Hosted production execution is unavailable; keep coding and validation disabled."
+                "Coding and validation must be enabled or disabled together."
             )
+        if settings.coding_enabled and settings.execution_backend != "cloud_run_jobs":
+            raise ConfigurationError(
+                "Production execution requires NEXUS_EXECUTION_BACKEND=cloud_run_jobs."
+            )
+        if settings.coding_enabled and settings.execution_backend == "cloud_run_jobs":
+            if not settings.cloud_run_job_name or not settings.cloud_run_region:
+                raise ConfigurationError("Cloud Run execution job and region are required.")
+            if not settings.cloud_build_service_account:
+                raise ConfigurationError(
+                    "CLOUD_BUILD_VALIDATION_SERVICE_ACCOUNT is required for cloud validation."
+                )
+            if not settings.cloud_build_service_agent:
+                raise ConfigurationError(
+                    "CLOUD_BUILD_SERVICE_AGENT is required to grant temporary source access."
+                )
+            if not settings.cloud_build_worker_pool:
+                raise ConfigurationError(
+                    "CLOUD_BUILD_WORKER_POOL is required for isolated cloud validation."
+                )
+            if not settings.github_app_slug and not (
+                settings.github_token and settings.approved_repositories
+            ):
+                raise ConfigurationError(
+                    "Cloud execution requires a GitHub App installation or a server-configured "
+                    "GITHUB_TOKEN with explicit APPROVED_REPOSITORIES."
+                )
         if not settings.attachments_bucket:
             raise ConfigurationError("ATTACHMENTS_BUCKET is required in production.")
-    if settings.coding_enabled and settings.validation_enabled and not settings.workspace_root:
+    if (
+        settings.coding_enabled
+        and settings.execution_backend == "local"
+        and not settings.workspace_root
+    ):
         raise ConfigurationError("WORKSPACE_ROOT is required when local execution is enabled.")
     if settings.workspace_root is not None:
         workspace = settings.workspace_root.resolve()

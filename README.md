@@ -21,6 +21,8 @@ test -e frontend/.env.local || cp frontend/.env.example frontend/.env.local
 
 The examples use `demo-nexus` consistently for the backend and frontend Firebase project IDs. They select Firestore, configure the local emulators, start with no configured target repositories, and leave `NEXUS_CODING_ENABLED` and `NEXUS_VALIDATION_ENABLED` set to `false`. Do not put GitHub or Gemini credentials in frontend variables.
 
+For a hosted setup that runs task coding and validation entirely on GCP, follow [the Cloud Run and Vertex AI deployment guide](docs/cloud-execution.md). It configures a Cloud Run Job worker, Cloud Build validation, Artifact Registry, service identities, and GitHub credentials stored in Secret Manager.
+
 Start the emulators:
 
 ```sh

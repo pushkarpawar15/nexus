@@ -39,10 +39,13 @@ class ExecutionService:
             or not self.settings.coding_enabled
             or not self.settings.validation_enabled
         ):
+            backend = (
+                "Cloud Run" if self.settings.execution_backend == "cloud_run_jobs" else "local"
+            )
             raise NexusError(
                 ErrorCode.DEPENDENCY_UNAVAILABLE,
-                "Local coding and validation are disabled or unavailable. Configure the local "
-                "worker, workspace, and validator images before starting execution.",
+                f"{backend} coding and validation are disabled or unavailable. Configure the "
+                f"{backend} execution worker and validator before starting execution.",
                 status_code=503,
             )
         if task.status != TaskStatus.READY:
@@ -165,10 +168,13 @@ class ExecutionService:
             or not self.settings.coding_enabled
             or not self.settings.validation_enabled
         ):
+            backend = (
+                "Cloud Run" if self.settings.execution_backend == "cloud_run_jobs" else "local"
+            )
             raise NexusError(
                 ErrorCode.DEPENDENCY_UNAVAILABLE,
-                "Local coding and validation are disabled or unavailable. Configure the local "
-                "worker, workspace, and validator images before retrying execution.",
+                f"{backend} coding and validation are disabled or unavailable. Configure the "
+                f"{backend} execution worker and validator before retrying execution.",
                 status_code=503,
             )
         ready = await WorkflowService(self.tasks).transition(

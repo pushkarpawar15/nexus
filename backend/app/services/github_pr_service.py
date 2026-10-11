@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -13,6 +14,7 @@ from app.core.errors import ErrorCode, NexusError
 from app.core.logging import redact_credentials
 from app.integrations.github import GitHubClient, GitHubOperationError
 from app.integrations.github_app import GitHubAppIntegration
+from app.integrations.workspace_artifact import download_workspace
 from app.integrations.validation_runner import compute_patch_fingerprint
 from app.models.task import TaskStatus, TransitionEvidence, TransitionEvidenceKind
 from app.repositories.records import WorkflowRepositories
@@ -79,9 +81,23 @@ class GitHubPRService:
 
     async def create(self, task_id: str, execution_id: str) -> PullRequestRecord:
         async with self._lock:
-            return await self._create_locked(task_id, execution_id)
+            execution = await self.records.executions.get(execution_id)
+            if execution is None or not (execution.workspace_reference or "").startswith("gs://"):
+                return await self._create_locked(task_id, execution_id)
+            with tempfile.TemporaryDirectory(prefix="nexus-publish-") as temporary:
+                workspace = await asyncio.to_thread(
+                    download_workspace,
+                    self.settings,
+                    execution.workspace_reference,
+                    Path(temporary) / "workspace",
+                )
+                return await self._create_locked(
+                    task_id, execution_id, workspace_override=workspace
+                )
 
-    async def _create_locked(self, task_id: str, execution_id: str) -> PullRequestRecord:
+    async def _create_locked(
+        self, task_id: str, execution_id: str, *, workspace_override: Path | None = None
+    ) -> PullRequestRecord:
         task = await self.tasks.get(task_id)
         execution = await self.records.executions.get(execution_id)
         if task is None:
@@ -112,7 +128,7 @@ class GitHubPRService:
                 status_code=409,
             )
         target = self.settings.approved_repositories[task.repository_key]
-        workspace = Path(execution.workspace_reference or "")
+        workspace = workspace_override or Path(execution.workspace_reference or "")
         if (
             not workspace.is_dir()
             or not execution.branch_reference

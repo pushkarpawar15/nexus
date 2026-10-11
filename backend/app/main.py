@@ -56,6 +56,7 @@ from app.schemas.tasks import (
 )
 from app.services.analysis_service import AnalysisService
 from app.services.approval_service import ApprovalService
+from app.services.cloud_run_dispatcher import CloudRunJobsDispatcher
 from app.services.execution_pipeline import ExecutionPipeline, LocalExecutionDispatcher
 from app.services.execution_service import ExecutionService
 from app.services.github_pr_service import GitHubPRService
@@ -118,21 +119,24 @@ def create_app(
     )
     dispatcher = None
     if runtime_settings.coding_enabled and runtime_settings.validation_enabled:
-        dispatcher = LocalExecutionDispatcher(
-            ExecutionPipeline(
-                runtime_settings,
-                task_repository,
-                workflow_repositories,
-                attachment_storage=attachment_storage,
-                github_app=github_app,
-                github_pr_service=github_pr_service,
-                checkpointer=(
-                    AsyncFirestoreCheckpointer(client)
-                    if client is not None and runtime_settings.storage == "firestore"
-                    else None
-                ),
+        if runtime_settings.execution_backend == "cloud_run_jobs":
+            dispatcher = CloudRunJobsDispatcher(runtime_settings, workflow_repositories)
+        else:
+            dispatcher = LocalExecutionDispatcher(
+                ExecutionPipeline(
+                    runtime_settings,
+                    task_repository,
+                    workflow_repositories,
+                    attachment_storage=attachment_storage,
+                    github_app=github_app,
+                    github_pr_service=github_pr_service,
+                    checkpointer=(
+                        AsyncFirestoreCheckpointer(client)
+                        if client is not None and runtime_settings.storage == "firestore"
+                        else None
+                    ),
+                )
             )
-        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
