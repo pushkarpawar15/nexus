@@ -13,8 +13,11 @@ from pydantic import SecretStr
 from app.core.config import Settings
 from app.core.logging import redact_credentials
 from app.integrations.github_app import GitHubAppIntegration
+from app.integrations.github_secrets import GitHubSecretStore
 from app.models.task import TaskStatus, TransitionEvidence, TransitionEvidenceKind
+from app.repositories.github_connections import GitHubConnectionRepository
 from app.repositories.records import WorkflowRepositories
+from app.repositories.skills import MemorySkillRepository, SkillRepository
 from app.repositories.tasks import TaskRepository
 from app.schemas.execution import ActivityEvent, ActivitySource, ExecutionStatus
 from app.schemas.security import SecurityStatus
@@ -29,6 +32,7 @@ from app.services.coding_workspace import (
 from app.services.github_pr_service import GitHubPRService
 from app.services.langgraph_workflow import build_operator_input_graph
 from app.services.security_service import SecurityService
+from app.services.skills import SkillService, skill_fingerprint
 from app.services.validation_service import ValidationService
 from app.services.workflow_service import WorkflowService
 
@@ -134,13 +138,22 @@ class ExecutionPipeline:
         github_app: GitHubAppIntegration | None = None,
         github_pr_service: GitHubPRService | None = None,
         checkpointer=None,
+        skills_repository: SkillRepository | None = None,
+        github_connections: GitHubConnectionRepository | None = None,
+        github_secret_store: GitHubSecretStore | None = None,
     ) -> None:
         self.settings, self.tasks, self.records = settings, tasks, records
         self.coder = coder or CodingAgent(settings)
         self.validator = validator or ValidationService(settings, tasks, records)
         self.security = security or SecurityService(settings, records)
+        self.skill_service = SkillService(skills_repository or MemorySkillRepository())
         self.attachment_storage = attachment_storage
         self.github_app = github_app
+        self.github_connections = github_connections
+        self.github_secret_store = github_secret_store
+        self._execution_settings: dict[str, Settings] = {}
+        self._execution_validators: dict[str, ValidationService] = {}
+        self._execution_pr_services: dict[str, GitHubPRService] = {}
         self.github_pr_service = github_pr_service or GitHubPRService(
             settings, tasks, records, github_app=github_app
         )
@@ -179,11 +192,66 @@ class ExecutionPipeline:
         workspace: CodingWorkspace | None = None
         workspace_stop = threading.Event()
         self._workspace_stop_events[execution.id] = workspace_stop
+        workspace_settings = self.settings
+        skills = []
         try:
+            skills = await self.skill_service.resolve_for_execution(task.repository_key)
+            await self._event(
+                task.id,
+                execution.id,
+                "coding.skills_resolved",
+                (
+                    f"Loaded {len(skills)} enabled skills for this coding execution."
+                    if skills
+                    else "No enabled global or repository-specific skills matched this execution."
+                ),
+                {
+                    "skills": [
+                        {
+                            "id": skill.id,
+                            "name": skill.name,
+                            "version": skill.version,
+                            "sha256": skill_fingerprint(skill),
+                        }
+                        for skill in skills
+                    ],
+                },
+            )
             target = self.settings.approved_repositories.get(task.repository_key)
+            if self.github_connections is not None:
+                connection = await self.github_connections.get(task.created_by, task.repository_key)
+                if connection is None:
+                    connections = await self.github_connections.list_all()
+                    connection = next(
+                        (
+                            item
+                            for item in connections
+                            if item.repository_key == task.repository_key
+                        ),
+                        None,
+                    )
+                if connection is not None:
+                    target = connection.target
+                    if self.github_secret_store is None:
+                        raise CodingWorkspaceError("Repository credential storage is unavailable.")
+                    token = await self.github_secret_store.get(connection.secret_name)
+                    task_targets = dict(self.settings.approved_repositories)
+                    task_targets[task.repository_key] = target
+                    workspace_settings = self.settings.model_copy(
+                        update={"github_token": token, "approved_repositories": task_targets}
+                    )
+                    self._execution_settings[execution.id] = workspace_settings
+                    self._execution_validators[execution.id] = ValidationService(
+                        workspace_settings, self.tasks, self.records
+                    )
+                    self._execution_pr_services[execution.id] = GitHubPRService(
+                        workspace_settings,
+                        self.tasks,
+                        self.records,
+                        github_app=self.github_app,
+                    )
             if target is None:
                 raise CodingWorkspaceError("Configured repository is no longer approved.")
-            workspace_settings = self.settings
             if target.github_installation_id and self.github_app is not None:
                 token = await self.github_app.installation_token(target.github_installation_id)
                 workspace_settings = self.settings.model_copy(
@@ -254,6 +322,7 @@ class ExecutionPipeline:
                 edit_options["attachments"] = attachments
             if isinstance(self.coder, CodingAgent):
                 edit_options["on_progress"] = report_coding_progress
+                edit_options["skills"] = skills
             await self._event(
                 task.id,
                 execution.id,
@@ -582,12 +651,16 @@ class ExecutionPipeline:
                         "approval_required": True,
                     },
                 )
-            elif self.github_pr_service is not None:
+            elif (
+                execution_pr_service := self._execution_pr_services.get(
+                    execution.id, self.github_pr_service
+                )
+            ) is not None:
                 stage = "GitHub publication"
                 publication_error = None
                 for publish_attempt in range(3):
                     try:
-                        await self.github_pr_service.create(task.id, execution.id)
+                        await execution_pr_service.create(task.id, execution.id)
                         publication_error = None
                         break
                     except Exception as exc:
@@ -630,7 +703,7 @@ class ExecutionPipeline:
             reason = "Local worker stopped before the execution completed."
             if workspace is not None:
                 try:
-                    await asyncio.to_thread(cleanup_workspace, self.settings, workspace)
+                    await asyncio.to_thread(cleanup_workspace, workspace_settings, workspace)
                 except Exception:
                     logger.exception(
                         "Could not clean stopped execution workspace (execution_id=%s)",
@@ -700,6 +773,9 @@ class ExecutionPipeline:
             await self._event(task.id, execution.id, "execution.failed", message)
         finally:
             self._workspace_stop_events.pop(execution.id, None)
+            self._execution_settings.pop(execution.id, None)
+            self._execution_validators.pop(execution.id, None)
+            self._execution_pr_services.pop(execution.id, None)
             current_execution = await self.records.executions.get(execution.id)
             delete_thread = getattr(self._operator_input_checkpointer, "adelete_thread", None)
             if (
@@ -797,7 +873,8 @@ class ExecutionPipeline:
                 f"Running configured validation commands (round {repair_round + 1}).",
                 {"round": repair_round + 1},
             )
-            validation = await self.validator.validate(task, execution, workspace.path)
+            validator = self._execution_validators.get(execution.id, self.validator)
+            validation = await validator.validate(task, execution, workspace.path)
             command_evidence = _validation_evidence(validation)
             await self._event(
                 task.id,

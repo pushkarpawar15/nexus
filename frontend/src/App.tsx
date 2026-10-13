@@ -67,10 +67,11 @@ import {
   connectGitHubPAT,
   deleteTaskAttachment,
   disconnectGitHub,
-  disconnectGitHubPAT,
   downloadTaskAttachment,
+  getRepositoryRemovalImpact,
   getGitHubConnection,
   listRepositories,
+  removeRepository,
   listRecentActivity,
   listTaskExecutions,
   listTaskHistory,
@@ -94,6 +95,7 @@ import {
   taskActivity,
 } from './lib/format';
 import { AppShell } from './components/AppShell';
+import { SkillsPage } from './components/SkillsPage';
 import {
   Badge,
   Button,
@@ -868,6 +870,7 @@ function RepositoriesPage() {
     }
   }
   async function disconnect() {
+    if (connection?.mode !== 'app') return;
     if (
       !window.confirm(
         'Disconnect this GitHub connection? Tasks and pull request records will remain.',
@@ -876,8 +879,7 @@ function RepositoriesPage() {
       return;
     setBusy(true);
     try {
-      if (connection?.mode === 'pat') await disconnectGitHubPAT(user);
-      else await disconnectGitHub(user);
+      await disconnectGitHub(user);
       toast('success', 'GitHub disconnected.');
       await load();
     } catch (e) {
@@ -908,6 +910,34 @@ function RepositoriesPage() {
         e instanceof Error
           ? e.message
           : 'Could not connect this GitHub repository.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function removeConnectedRepository(
+    repo: Awaited<ReturnType<typeof listRepositories>>['items'][number],
+  ) {
+    if (repo.mode !== 'pat') return;
+    setBusy(true);
+    try {
+      const impact = await getRepositoryRemovalImpact(user, repo.key);
+      const pendingWarning = impact.pending_task_count
+        ? ` ${impact.pending_task_count} pending task(s) will be hidden while the repository is disconnected. They will reappear if you reconnect the same repository.`
+        : '';
+      if (
+        !window.confirm(
+          `Remove ${repo.label} from your connected repositories?${pendingWarning} Task records and history will not be deleted.`,
+        )
+      )
+        return;
+      await removeRepository(user, repo.key, impact.pending_task_count > 0);
+      toast('success', `${repo.label} was removed. Task history was kept.`);
+      await load();
+    } catch (e) {
+      toast(
+        'error',
+        e instanceof Error ? e.message : 'Could not remove this repository.',
       );
     } finally {
       setBusy(false);
@@ -945,14 +975,14 @@ function RepositoriesPage() {
             <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
               {connection?.connected
                 ? connection.mode === 'pat'
-                  ? 'Connected with a fine-grained personal access token. The token stays in backend process memory and must be re-entered after a backend restart.'
+                  ? 'Your fine-grained token is stored in Google Secret Manager and is never returned to the browser. Repository access is scoped to your account.'
                   : 'Connected through a GitHub App installation. Repository access is controlled by the installation.'
-                : 'Connect with a GitHub App or enter a fine-grained personal access token for one repository.'}
+                : 'Connect with a GitHub App or add repositories with fine-grained personal access tokens.'}
             </p>
           </div>
         </div>
         <div className="flex gap-2">
-          {connection?.connected ? (
+          {connection?.connected && connection.mode === 'app' ? (
             <Button
               variant="secondary"
               loading={busy}
@@ -963,53 +993,51 @@ function RepositoriesPage() {
           ) : null}
         </div>
       </Panel>
-      {!connection?.connected && (
-        <Panel className="mb-6 p-5 sm:p-7">
-          <h2 className="font-display text-lg font-semibold">
-            Connect one repository with a fine-grained token
-          </h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            Create a token limited to this repository with Contents and Pull
-            requests set to Read and write. NEXUS verifies the token and
-            repository access; GitHub enforces the granted write permissions
-            when publishing. The token is held in backend memory and is not
-            saved to the browser or Firestore.
-          </p>
-          <form
-            className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end"
-            onSubmit={(event) => void connectWithPAT(event)}
-          >
-            <label className="grid gap-2 text-sm font-medium text-zinc-200">
-              Repository
-              <input
-                required
-                autoComplete="off"
-                placeholder="owner/repository"
-                value={repositoryName}
-                onChange={(event) => setRepositoryName(event.target.value)}
-                className="min-h-11 rounded-xl border border-line bg-canvas px-3 text-sm outline-none focus:border-mint"
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-medium text-zinc-200">
-              Fine-grained token
-              <input
-                required
-                type="password"
-                autoComplete="new-password"
-                placeholder="github_pat_…"
-                value={pat}
-                onChange={(event) => setPat(event.target.value)}
-                className="min-h-11 rounded-xl border border-line bg-canvas px-3 text-sm outline-none focus:border-mint"
-              />
-            </label>
-            <Button type="submit" loading={busy}>
-              <GitBranch size={16} />
-              Connect repository
-            </Button>
-          </form>
-        </Panel>
-      )}
-      {!connection?.connected && connection?.configured && (
+      <Panel className="mb-6 p-5 sm:p-7">
+        <h2 className="font-display text-lg font-semibold">
+          Add a repository with a fine-grained token
+        </h2>
+        <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+          Create a token limited to this repository with Contents and Pull
+          requests set to Read and write. NEXUS verifies access and stores the
+          token in Google Secret Manager; it is not saved to the browser or
+          Firestore. Repositories and tasks are visible only to users who
+          connect the same repository.
+        </p>
+        <form
+          className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end"
+          onSubmit={(event) => void connectWithPAT(event)}
+        >
+          <label className="grid gap-2 text-sm font-medium text-zinc-200">
+            Repository
+            <input
+              required
+              autoComplete="off"
+              placeholder="owner/repository"
+              value={repositoryName}
+              onChange={(event) => setRepositoryName(event.target.value)}
+              className="min-h-11 rounded-xl border border-line bg-canvas px-3 text-sm outline-none focus:border-mint"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-zinc-200">
+            Fine-grained token
+            <input
+              required
+              type="password"
+              autoComplete="new-password"
+              placeholder="github_pat_…"
+              value={pat}
+              onChange={(event) => setPat(event.target.value)}
+              className="min-h-11 rounded-xl border border-line bg-canvas px-3 text-sm outline-none focus:border-mint"
+            />
+          </label>
+          <Button type="submit" loading={busy}>
+            <GitBranch size={16} />
+            Add repository
+          </Button>
+        </form>
+      </Panel>
+      {connection?.configured && (
         <Panel className="mb-6 flex flex-wrap items-center justify-between gap-4 p-5">
           <div>
             <h2 className="font-semibold">Already created a GitHub App?</h2>
@@ -1059,6 +1087,17 @@ function RepositoriesPage() {
                 >
                   Open on GitHub ↗
                 </a>
+              )}
+              {repo.mode === 'pat' && (
+                <Button
+                  variant="secondary"
+                  className="mt-4"
+                  loading={busy}
+                  onClick={() => void removeConnectedRepository(repo)}
+                >
+                  <Trash2 size={15} />
+                  Remove from workspace
+                </Button>
               )}
             </Panel>
           ))}
@@ -1548,14 +1587,18 @@ function TaskDetail() {
                 >
                   {availableModels.map((model) => (
                     <option key={model.id} value={model.id}>
-                      {model.label}{model.id === modelChoices?.analysis_default ? ' · recommended' : ''}
+                      {model.label}
+                      {model.id === modelChoices?.analysis_default
+                        ? ' · recommended'
+                        : ''}
                     </option>
                   ))}
                 </select>
               </label>
             )}
           {(task.status === 'READY' ||
-            (['FAILED', 'BLOCKED'].includes(task.status) && task.execution_plan)) && (
+            (['FAILED', 'BLOCKED'].includes(task.status) &&
+              task.execution_plan)) && (
             <label className="grid gap-1 text-xs font-semibold text-muted">
               Coding model
               <select
@@ -1567,7 +1610,10 @@ function TaskDetail() {
               >
                 {availableModels.map((model) => (
                   <option key={model.id} value={model.id}>
-                    {model.label}{model.id === modelChoices?.coding_default ? ' · recommended' : ''}
+                    {model.label}
+                    {model.id === modelChoices?.coding_default
+                      ? ' · recommended'
+                      : ''}
                   </option>
                 ))}
               </select>
@@ -2683,6 +2729,7 @@ export default function App() {
         <Route path="activity" element={<ActivityPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="repositories" element={<RepositoriesPage />} />
+        <Route path="skills" element={<SkillsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

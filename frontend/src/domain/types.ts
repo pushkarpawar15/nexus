@@ -100,6 +100,20 @@ export interface TaskAttachment {
   created_at: string;
   created_by: string;
 }
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  scope: 'global' | 'repository';
+  repository_key: string | null;
+  enabled: boolean;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  updated_by: string;
+}
 export type ExecutionStatus =
   'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'BLOCKED';
 export interface Execution {

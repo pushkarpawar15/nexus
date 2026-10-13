@@ -13,8 +13,11 @@ from app.core.logging import configure_logging
 from app.integrations.attachments import AttachmentStorage
 from app.integrations.cloud_build_validation import CloudBuildValidationRunner
 from app.integrations.github_app import GitHubAppIntegration
+from app.integrations.github_secrets import GoogleSecretManagerGitHubSecretStore
 from app.integrations.workspace_artifact import upload_workspace
+from app.repositories.github_connections import FirestoreGitHubConnectionRepository
 from app.repositories.records import create_firestore_workflow_repositories
+from app.repositories.skills import FirestoreSkillRepository
 from app.repositories.tasks import FirestoreTaskRepository
 from app.schemas.execution import ExecutionStatus
 from app.schemas.pull_request import PullRequestStatus
@@ -36,7 +39,6 @@ async def run_worker() -> None:
         project=settings.google_cloud_project,
         database=settings.firestore_database,
     )
-    validation_runner = CloudBuildValidationRunner(settings)
     try:
         records = create_firestore_workflow_repositories(client)
         execution = await records.executions.get(execution_id)
@@ -51,11 +53,29 @@ async def run_worker() -> None:
             allowed_targets = {f"github-{item.github_repository_id}": item for item in targets}
         else:
             allowed_targets = dict(settings.approved_repositories)
+        connections = FirestoreGitHubConnectionRepository(client)
+        all_connections = await connections.list_all()
+        for connection in all_connections:
+            allowed_targets.setdefault(connection.repository_key, connection.target)
         task_repository = FirestoreTaskRepository(client, frozenset(allowed_targets))
         task = await task_repository.get(execution.task_id)
         if task is None:
             raise RuntimeError("Task repository is no longer installed or approved in GitHub.")
-        settings.approved_repositories = allowed_targets
+        task_settings = settings.model_copy(update={"approved_repositories": allowed_targets})
+        matching_connections = [
+            item for item in all_connections if item.repository_key == task.repository_key
+        ]
+        task_connection = next(
+            (item for item in matching_connections if item.user_id == task.created_by),
+            matching_connections[0] if matching_connections else None,
+        )
+        if task_connection is not None:
+            token = await GoogleSecretManagerGitHubSecretStore(settings).get(
+                task_connection.secret_name
+            )
+            task_settings = task_settings.model_copy(update={"github_token": token})
+        settings = task_settings
+        validation_runner = CloudBuildValidationRunner(settings)
         settings.workspace_root = settings.workspace_root or Path("/tmp/nexus-workspaces")
         settings.workspace_root.mkdir(parents=True, exist_ok=True, mode=0o700)
 
@@ -75,6 +95,7 @@ async def run_worker() -> None:
             github_app=github_app,
             github_pr_service=github_pr_service,
             checkpointer=AsyncFirestoreCheckpointer(client),
+            skills_repository=FirestoreSkillRepository(client),
         )
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):

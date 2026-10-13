@@ -2,7 +2,7 @@
 
 NEXUS can run coding tasks without a developer machine, Docker daemon, or local workspace. The API dispatches each task to a Cloud Run Job. That worker clones the selected GitHub repository, calls the configured coding model through Vertex AI, and asks Cloud Build to run the fixed PayFlow validation profile. Firestore holds task and activity state, and GCS holds attachments plus a temporary validated workspace when a PR needs human approval or a retry.
 
-The API and worker run as separate Cloud Run identities. Do not put GitHub credentials or model credentials in Firebase Hosting or `VITE_*` settings. Use a GitHub App installation for user/repository scoped access, or configure a server managed fine grained PAT in Secret Manager for an explicitly allowlisted repository. The PAT connection entered in the UI is process local; for Cloud Run, use Secret Manager and configure `APPROVED_REPOSITORIES` so the worker can access the same fixed repository after instances restart.
+The API and worker run as separate Cloud Run identities. Do not put GitHub credentials or model credentials in Firebase Hosting or `VITE_*` settings. GitHub App installations remain workspace-wide. Fine-grained PAT repositories belong to the Firebase user who adds them; repository metadata is stored in Firestore and each PAT value is stored in Google Secret Manager. The API identity needs permission to create, update, read, and delete PAT secrets. The worker identity needs access to the `nexus-github-*` secrets so executions continue after instances restart.
 
 ## 1. Choose the GCP project and region
 
@@ -50,7 +50,9 @@ BUILD_SA="nexus-build@$PROJECT_ID.iam.gserviceaccount.com"
 
 Grant the API identity Firestore access, object read/write access to the attachments bucket, and permission to start/read/cancel executions of the one NEXUS Cloud Run Job. A project-level `roles/run.developer` is a quick start; replace it with a custom role limited to `run.jobs.runWithOverrides`, `run.executions.get`, and `run.executions.cancel` once deployed.
 
-The worker identity needs Firestore read/write, Vertex AI User (`roles/aiplatform.user`), access to the private attachments bucket, permission to create Cloud Builds (`roles/cloudbuild.builds.editor`), Cloud Logging Viewer (`roles/logging.viewer`) to read failed validation diagnostics for automated repair, and `roles/iam.serviceAccountUser` on `nexus-build`. It also needs temporary bucket creation and bucket-IAM management for per-validation source buckets; grant `roles/storage.admin` only to this worker identity, not the API. The worker account needs access to the GitHub App secrets described below.
+The API identity needs Secret Manager permissions to get/list secrets, create secrets, add secret versions, access versions, and delete secrets. Prefer a custom role; a temporary `roles/secretmanager.admin` grant is broader than required.
+
+The worker identity needs Firestore read/write, Vertex AI User (`roles/aiplatform.user`), access to the private attachments bucket, permission to create Cloud Builds (`roles/cloudbuild.builds.editor`), Cloud Logging Viewer (`roles/logging.viewer`) to read failed validation diagnostics for automated repair, and `roles/iam.serviceAccountUser` on `nexus-build`. It also needs temporary bucket creation and bucket-IAM management for per-validation source buckets; grant `roles/storage.admin` only to this worker identity, not the API. Grant it Secret Manager accessor permission for the dynamically created `nexus-github-*` secrets; use an IAM condition limiting the resource name prefix or an equivalent custom role rather than granting access to unrelated secrets.
 
 The build-step identity needs `roles/logging.logWriter` and `roles/artifactregistry.reader`. For each validation, both this identity and the Cloud Build service agent receive `roles/storage.objectViewer` on that build's temporary source bucket so Cloud Build can stage the source before starting the steps. The bucket is deleted after the build; this does not grant access to other active task sources. Cloud Build's service agent must be enabled for the project and allowed to use the selected private worker pool.
 
@@ -104,13 +106,7 @@ Choose one of these options:
 
 **GitHub App (recommended for multiple users or repositories).** Install your GitHub App on the repositories NEXUS should be allowed to modify. It needs repository Contents read/write and Pull requests read/write permissions. Save the App ID, slug, PEM private key, state secret, and optional webhook secret in Secret Manager. The API needs the App credentials for installation/callback handling; the worker needs the App ID and private key to mint short lived installation tokens.
 
-**Server managed PAT (one allowlisted repository).** Create a fine grained PAT with access to only the repository NEXUS should modify. Grant Contents read/write and Pull requests read/write; Metadata read is required by GitHub. Store it in Secret Manager, never in Firebase Hosting. Find the repository ID with `gh api repos/OWNER/REPO --jq .id`, then configure this mapping on both Cloud Run resources so it matches the repository key used in Firestore:
-
-```json
-{"github-REPOSITORY_ID":{"owner":"OWNER","repo":"REPO","label":"OWNER/REPO","base_branch":"main","github_repository_id":REPOSITORY_ID}}
-```
-
-With a PAT, the backend uses this one server managed credential for the allowlisted repository. The interactive PAT pasted into a UI session is not persisted or shared with the worker. Set the JSON mapping above as `APPROVED_REPOSITORIES` on both the API and worker, and bind `GITHUB_TOKEN` from Secret Manager on both resources. For example, set the repository map in Cloud Console's **Variables & Secrets** page, or use `--update-env-vars '^@^APPROVED_REPOSITORIES={"github-123456":{"owner":"OWNER","repo":"REPO","label":"OWNER/REPO","base_branch":"main","github_repository_id":123456}}@'` (replace the ID and names) on each resource.
+**Per-user fine-grained PATs.** Users add one or more repositories from the NEXUS Repositories page. The API validates each token and stores it in Secret Manager; users do not configure PAT values in `GITHUB_TOKEN`, `APPROVED_REPOSITORIES`, Firebase Hosting, or browser storage. The API identity needs the Secret Manager permissions above; the worker identity needs `roles/secretmanager.secretAccessor` scoped to the dynamically created `nexus-github-*` secrets. The worker resolves an active credential for the task's stable GitHub repository key at execution time.
 
 ```sh
 printf %s 'APP_ID' | gcloud secrets create nexus-github-app-id --data-file=-
@@ -127,17 +123,7 @@ gcloud secrets add-iam-policy-binding nexus-github-app-slug --member="serviceAcc
 gcloud secrets add-iam-policy-binding nexus-github-app-private-key --member="serviceAccount:$WORKER_SA" --role=roles/secretmanager.secretAccessor
 ```
 
-For the PAT option, run this separately (instead of creating the App secrets):
-
-```sh
-read -rsp 'Fine grained PAT: ' GH_PAT; printf '\n'
-printf %s "$GH_PAT" | gcloud secrets create nexus-github-token --data-file=-
-unset GH_PAT
-gcloud secrets add-iam-policy-binding nexus-github-token --member="serviceAccount:$API_SA" --role=roles/secretmanager.secretAccessor
-gcloud secrets add-iam-policy-binding nexus-github-token --member="serviceAccount:$WORKER_SA" --role=roles/secretmanager.secretAccessor
-```
-
-For GitHub App, set a strong, separate `GITHUB_APP_WEBHOOK_SECRET` only if you configure webhooks. Keep the state secret stable between API revisions so pending installation callbacks remain verifiable. Bind `GITHUB_TOKEN=nexus-github-token:latest` as a secret on both the API and worker only when using the PAT option. Do not configure a broad classic PAT.
+For GitHub App, set a strong, separate `GITHUB_APP_WEBHOOK_SECRET` only if you configure webhooks. Keep the state secret stable between API revisions so pending installation callbacks remain verifiable. Do not configure a broad classic PAT.
 
 ## 6. Build and deploy the API and worker images
 
@@ -162,6 +148,7 @@ FIREBASE_PROJECT_ID=PROJECT_ID
 GOOGLE_CLOUD_LOCATION=asia-south1
 GEMINI_ANALYSIS_MODEL=<supported Vertex model ID>
 GEMINI_CODING_MODEL=<supported Vertex model ID>
+NEXUS_CODING_AGENT=antigravity
 CODING_MODEL_LOCATION=global
 CODING_MODEL_TIMEOUT_SECONDS=180
 ATTACHMENTS_BUCKET=<private GCS bucket already used by NEXUS>
@@ -194,7 +181,7 @@ gcloud run jobs create nexus-execution-worker \
 
 Then deploy the API as a Cloud Run service using the same production settings, but use `API_SA`, include `CORS_ORIGINS`, and grant it access to the GitHub App secrets plus the private bucket. Set Vertex model env vars on both resources. Deploy the API with `--allow-unauthenticated` only because Firebase ID-token checks protect API routes; keep admin endpoints behind application authorization. Do not set `WORKSPACE_ROOT` on the API.
 
-For the PAT option, omit the `GITHUB_APP_*` bindings in the job and API examples and bind `GITHUB_TOKEN=nexus-github-token:latest` instead. Set `APPROVED_REPOSITORIES` on both resources using the repository mapping above. Keep the actual token in Secret Manager; never put it in an env-vars file or a shell command argument.
+When using only per-user PAT connections, the job does not need the `GITHUB_APP_*` bindings. Do not bind a `GITHUB_TOKEN` environment variable or configure user-owned repositories through `APPROVED_REPOSITORIES`; the API and worker resolve those credentials from Firestore metadata and Secret Manager at runtime.
 
 Example API deploy skeleton (add the model IDs, frontend URL, exact CORS origin, and storage bucket for your project):
 

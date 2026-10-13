@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 Environment = Literal["development", "testing", "production"]
 StorageMode = Literal["firestore", "memory"]
 ExecutionBackend = Literal["local", "cloud_run_jobs"]
+CodingAgentRuntime = Literal["antigravity", "gemini"]
 _REPOSITORY_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,149}$")
 _PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 _EMULATOR_HOST = re.compile(r"^(?:localhost|[A-Za-z0-9.-]+)(?::[0-9]{1,5})?$")
@@ -103,6 +104,10 @@ class Settings(BaseSettings):
         default="gemini-3.8-flash",
         min_length=1,
         validation_alias=AliasChoices("GEMINI_CODING_MODEL", "gemini_coding_model"),
+    )
+    coding_agent_runtime: CodingAgentRuntime = Field(
+        default="antigravity",
+        validation_alias=AliasChoices("NEXUS_CODING_AGENT", "coding_agent_runtime"),
     )
     coding_model_location: str = Field(
         default="global",

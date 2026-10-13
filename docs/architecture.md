@@ -57,12 +57,12 @@ The workflow activity and typed task/execution records remain the user-facing ev
 ## Trust boundaries
 
 1. The API accepts task text and a repository key, never a clone URL or shell command.
-2. `APPROVED_REPOSITORIES` maps the key to the server-selected owner/repository. Local source checkouts must be verified against that allowlist before cloning.
+2. Repository keys map to server-selected targets. Static `APPROVED_REPOSITORIES` and GitHub App installations are workspace-wide; PAT connections are scoped to the Firebase user and resolve their token from Secret Manager. Task and execution APIs filter by the user's active repository keys.
 3. Gemini recommendations are typed and remain subject to deterministic policy. Model output cannot grant permissions or approve work.
 4. Coding runs in a disposable workspace separated from the NEXUS checkout and target checkout.
 5. Validation uses fixed argv arrays inside prebuilt images with no network, nonroot users, dropped capabilities, no-new-privileges, read-only source mounts, bounded resources and command timeouts. Missing images and failed commands block the workflow.
 6. Security findings and approval decisions refer to the patch fingerprint. Approvals are append-only.
-7. GitHub publication is backend-only, allowlisted, URL-verified and idempotent. The browser never receives `GITHUB_TOKEN`.
+7. GitHub publication is backend-only, allowlisted, URL-verified and idempotent. The browser never receives a GitHub token. Removing a PAT connection deletes its user connection and secret but retains task and execution records; reconnecting the same GitHub repository ID restores access to those records.
 
 ## Local and hosted boundaries
 

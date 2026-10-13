@@ -8,6 +8,7 @@ import type {
   Page,
   PullRequest,
   SecurityReview,
+  Skill,
   Task,
   TaskStatus,
   TaskType,
@@ -85,6 +86,8 @@ export interface ConnectedRepository {
   repo?: string;
   base_branch?: string;
   private?: boolean;
+  mode?: 'app' | 'pat';
+  account_login?: string;
 }
 export const listRepositories = (u: User | null, signal?: AbortSignal) =>
   request<{ items: ConnectedRepository[] }>(
@@ -92,6 +95,36 @@ export const listRepositories = (u: User | null, signal?: AbortSignal) =>
     '/api/repositories',
     signal ? { signal } : {},
   );
+export const listSkills = (u: User | null, repositoryKey?: string) =>
+  request<{ items: Skill[] }>(
+    u,
+    `/api/skills${repositoryKey ? q({ repository_key: repositoryKey }) : ''}`,
+  );
+export type SkillWriteInput = Pick<
+  Skill,
+  | 'name'
+  | 'description'
+  | 'instructions'
+  | 'scope'
+  | 'repository_key'
+  | 'enabled'
+>;
+export const createSkill = (u: User | null, body: SkillWriteInput) =>
+  request<Skill>(u, '/api/skills', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+export const updateSkill = (
+  u: User | null,
+  skillId: string,
+  body: SkillWriteInput,
+) =>
+  request<Skill>(u, `/api/skills/${id(skillId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+export const deleteSkill = (u: User | null, skillId: string) =>
+  request<void>(u, `/api/skills/${id(skillId)}`, { method: 'DELETE' });
 export const getGitHubConnection = (u: User | null) =>
   request<{
     configured: boolean;
@@ -115,8 +148,23 @@ export const connectGitHubPAT = (
     mode: 'pat';
     repository: string;
   }>(u, '/api/github/pat', { method: 'POST', body: JSON.stringify(body) });
-export const disconnectGitHubPAT = (u: User | null) =>
-  request<void>(u, '/api/github/pat', { method: 'DELETE' });
+export const getRepositoryRemovalImpact = (
+  u: User | null,
+  repositoryKey: string,
+) =>
+  request<{ repository_key: string; pending_task_count: number }>(
+    u,
+    `/api/repositories/${id(repositoryKey)}/removal-impact`,
+  );
+export const removeRepository = (
+  u: User | null,
+  repositoryKey: string,
+  confirmPendingTasks: boolean,
+) =>
+  request<void>(u, `/api/repositories/${id(repositoryKey)}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ confirm_pending_tasks: confirmPendingTasks }),
+  });
 export const disconnectGitHub = (u: User | null) =>
   request<void>(u, '/api/github/connection', { method: 'DELETE' });
 export const uploadTaskAttachments = (

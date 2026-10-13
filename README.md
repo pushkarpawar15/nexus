@@ -1,6 +1,6 @@
 # NEXUS
 
-NEXUS is a human-supervised engineering workflow. Connect repositories through a GitHub App or a fine-grained PAT in the UI. PATs are held in backend memory for local development; the example configuration starts disconnected and keeps coding and validation disabled.
+NEXUS is a human-supervised engineering workflow. Connect repositories through a GitHub App or add per-user repositories with fine-grained PATs in the UI. PAT values are persisted in Google Secret Manager and are never returned to the browser; task history is retained when a repository is removed. The example configuration starts disconnected and keeps coding and validation disabled.
 
 ## Requirements
 
@@ -8,7 +8,7 @@ NEXUS is a human-supervised engineering workflow. Connect repositories through a
 - Node.js 20 or newer and npm
 - Firebase CLI and Java 21 or newer to run the local Auth and Firestore emulators
 
-Task analysis and coding expose per-task model selectors, with Gemini 3.8 Flash recommended by default. Analysis can use a backend-only `GEMINI_API_KEY` locally or Vertex AI. Coding is configured to use Vertex AI with Application Default Credentials, `GOOGLE_CLOUD_PROJECT`, and `CODING_MODEL_LOCATION=global`; it does not use the API key. The Cloud Run service identity needs Vertex AI access.
+Task analysis and coding expose per-task model selectors, with Gemini 3.8 Flash recommended by default. Analysis can use a backend-only `GEMINI_API_KEY` locally or Vertex AI. Coding uses the Antigravity runtime by default (`NEXUS_CODING_AGENT=antigravity`) with Vertex AI, Application Default Credentials, `GOOGLE_CLOUD_PROJECT`, and `CODING_MODEL_LOCATION=global`; set the runtime to `gemini` to use the direct Gemini adapter. Neither coding runtime uses the API key. The Cloud Run service identity needs Vertex AI access. App-managed global and repository-specific coding skills are described in [the skills guide](docs/skills.md).
 
 ## Local setup
 

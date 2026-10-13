@@ -9,6 +9,7 @@ import {
   Menu,
   Plus,
   ShieldCheck,
+  Sparkles,
   Workflow,
   X,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ const links = [
   { to: '/activity', label: 'Agent Activity', icon: Activity },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
   { to: '/repositories', label: 'Repositories', icon: GitBranch },
+  { to: '/skills', label: 'Skills', icon: Sparkles },
 ];
 export function AppShell() {
   const { user, loading, configured, emulator, signOutUser } = useAuth();
@@ -38,7 +40,9 @@ export function AppShell() {
       ? 'Task detail'
       : location.pathname === '/repositories'
         ? 'Repositories'
-        : 'Command Center');
+        : location.pathname === '/skills'
+          ? 'Skills'
+          : 'Command Center');
   return (
     <div className="min-h-screen bg-canvas text-zinc-100">
       {drawer && (

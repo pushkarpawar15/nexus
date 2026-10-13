@@ -2,15 +2,17 @@
 
 NEXUS connects repositories through either a GitHub App or a fine-grained personal access token (PAT). For a single repository, the PAT flow does not require registering a GitHub App. After a patch passes the configured validation and security gates, NEXUS opens a PR automatically when human approval is not required; approval-required work opens the PR after an administrator approves the patch. The task page keeps a manual retry action for transient GitHub failures.
 
-## Connect one repository with a fine-grained PAT
+## Add repositories with fine-grained PATs
 
 1. On GitHub, open **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**.
-2. Choose the repository owner as the resource owner and select only the repository NEXUS should use.
+2. Choose the repository owner as the resource owner and select only the repository NEXUS should use. Repeat this flow to add more repositories.
 3. Under repository permissions, set **Contents** and **Pull requests** to **Read and write**. Leave other permissions disabled.
 4. Set a suitable expiration and generate the token. Copy it while GitHub shows it.
-5. In NEXUS, open **Repositories**. Enter `owner/repository` and paste the token into **Connect one repository with a fine-grained token**.
+5. In NEXUS, open **Repositories**. Enter `owner/repository` and paste the token into **Add a repository with a fine-grained token**.
 
-NEXUS verifies the token identity and repository access with GitHub before connecting. GitHub enforces the token's granted write permissions when NEXUS pushes a branch or opens a PR. The token is sent to the authenticated backend over the local API and held only in backend process memory; it is not saved to the browser or Firestore. Re-enter it after restarting the backend. Disconnecting clears it from process memory. Do not put this token in a `VITE_` variable or commit it to a file.
+NEXUS verifies the token identity, repository identity, and write permission with GitHub before connecting. The token is sent to the authenticated backend and stored in Google Secret Manager; only its Secret Manager resource name and non-secret repository metadata are stored in Firestore. The token is never returned to the browser or written to logs. Do not put it in a `VITE_` variable or commit it to a file.
+
+PAT connections belong to the Firebase user who added them. Repositories and their task history are visible only to users who have that repository connected (or have access through a GitHub App/configured repository). Removing a PAT repository first shows the number of pending tasks. Confirming removal revokes that user's saved credential and hides the repository's tasks from that user without deleting task, execution, activity, or pull-request records. Reconnecting the same GitHub repository restores visibility because task records use its stable GitHub repository ID.
 
 GitHub can require organization approval or SSO authorization before an organization token works. If verification fails, confirm the token is not expired, its resource owner and repository are correct, and both required permissions are enabled.
 
@@ -55,7 +57,7 @@ Disconnecting removes the stored installation link. Uninstalling the app in GitH
 
 ## 4. Add task attachments
 
-Task creation and task details accept up to ten files, 10 MB each and 20 MB total: PDF, PNG, JPEG, WebP, GIF, plain text, Markdown, CSV, and JSON. Files are private, scoped to their task, and available for authorized download/removal. Before coding, the Vertex AI adapter passes them to Gemini as document/image inputs. Attachments are treated as untrusted context; the model has no shell or filesystem tools and can only return bounded, validated file operations.
+Task creation and task details accept up to ten files, 10 MB each and 20 MB total: PDF, PNG, JPEG, WebP, GIF, plain text, Markdown, CSV, and JSON. Files are private, scoped to their task, and available for authorized download/removal. Before coding, the selected Vertex AI coding runtime passes them to the agent as document/image inputs. Attachments are treated as untrusted context; the model has no shell or filesystem tools and can only return bounded, validated file operations.
 
 Local development stores files under `ATTACHMENTS_ROOT`. Production requires a private `ATTACHMENTS_BUCKET` and grants the API service identity object access to that bucket.
 
@@ -83,7 +85,7 @@ NEXUS_VALIDATION_ENABLED=true
 NEXUS_AI_PERMISSIONS=ai_execute,ai_validate,security_review
 ```
 
-Restart the backend after changing these settings. The PAT connection is held in backend memory, so reconnect the repository after a backend restart. The built-in validation profile covers the PayFlow monorepo (`backend/` and `frontend/`); a PAT-connected repository named `payflow` is matched to this profile when both directories exist. Other repository layouts remain blocked from PR publication until a matching validator profile and images are configured. The example environment deliberately leaves the worker flags and AI permissions off.
+Restart the backend after changing these settings. The built-in validation profile covers the PayFlow monorepo (`backend/` and `frontend/`); a PAT-connected repository named `payflow` is matched to this profile when both directories exist. Other repository layouts remain blocked from PR publication until a matching validator profile and images are configured. The example environment deliberately leaves the worker flags and AI permissions off.
 
 When an execution is requested, the isolated worker creates a branch, asks the coding model for bounded file operations, runs the configured Docker validation checks, and performs security review. A validated task opens a PR automatically when human approval is not required. If approval is required, approving the patch opens the PR; transient publication failures keep a retry action on the task page.
 

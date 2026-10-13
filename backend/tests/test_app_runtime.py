@@ -184,6 +184,8 @@ def test_firestore_app_factory_wires_the_workflow_collections() -> None:
         "security_reviews",
         "approvals",
         "pull_requests",
+        "skills",
+        "github_repository_connections",
     }
 
 

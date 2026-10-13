@@ -12,8 +12,21 @@ class TaskRepository(Protocol):
 
     async def get(self, task_id: str) -> Task | None: ...
 
+    async def get_for_repository_keys(
+        self, task_id: str, repository_keys: frozenset[str]
+    ) -> Task | None: ...
+
     async def list(
         self, *, status: TaskStatus | None, limit: int, offset: int
+    ) -> tuple[list[Task], int]: ...
+
+    async def list_for_repository_keys(
+        self,
+        *,
+        repository_keys: frozenset[str],
+        status: TaskStatus | None,
+        limit: int,
+        offset: int,
     ) -> tuple[list[Task], int]: ...
 
     async def replace(self, task: Task, *, expected_updated_at: Any) -> Task: ...
@@ -40,11 +53,36 @@ class MemoryTaskRepository:
             task = self._tasks.get(task_id)
             return deepcopy(task) if task is not None else None
 
+    async def get_for_repository_keys(
+        self, task_id: str, repository_keys: frozenset[str]
+    ) -> Task | None:
+        task = await self.get(task_id)
+        if task is None or task.repository_key not in repository_keys:
+            return None
+        return task
+
     async def list(
         self, *, status: TaskStatus | None, limit: int, offset: int
     ) -> tuple[list[Task], int]:
         async with self._lock:
             tasks = list(self._tasks.values())
+            if status is not None:
+                tasks = [task for task in tasks if task.status == status]
+            tasks.sort(key=lambda task: (task.created_at, task.id), reverse=True)
+            return deepcopy(tasks[offset : offset + limit]), len(tasks)
+
+    async def list_for_repository_keys(
+        self,
+        *,
+        repository_keys: frozenset[str],
+        status: TaskStatus | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[Task], int]:
+        async with self._lock:
+            tasks = [
+                task for task in self._tasks.values() if task.repository_key in repository_keys
+            ]
             if status is not None:
                 tasks = [task for task in tasks if task.status == status]
             tasks.sort(key=lambda task: (task.created_at, task.id), reverse=True)
@@ -94,12 +132,38 @@ class FirestoreTaskRepository:
             return None
         return task
 
+    async def get_for_repository_keys(
+        self, task_id: str, repository_keys: frozenset[str]
+    ) -> Task | None:
+        if not repository_keys:
+            return None
+        snapshot = await self._collection.document(task_id).get()
+        if not snapshot.exists:
+            return None
+        task = Task.model_validate(snapshot.to_dict())
+        return task if task.repository_key in repository_keys else None
+
     async def list(
         self, *, status: TaskStatus | None, limit: int, offset: int
     ) -> tuple[list[Task], int]:
-        if not self._approved_repository_keys:
+        return await self.list_for_repository_keys(
+            repository_keys=self._approved_repository_keys,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def list_for_repository_keys(
+        self,
+        *,
+        repository_keys: frozenset[str],
+        status: TaskStatus | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[Task], int]:
+        if not repository_keys:
             return [], 0
-        keys = sorted(self._approved_repository_keys)
+        keys = sorted(repository_keys)
         snapshots = []
         for start in range(0, len(keys), 30):
             query = self._collection.where("repository_key", "in", keys[start : start + 30])

@@ -22,11 +22,15 @@ from app.models.task import (
 )
 from app.policies.workforce import WorkforcePolicy
 from app.repositories.records import create_memory_workflow_repositories
+from app.repositories.skills import MemorySkillRepository
 from app.repositories.tasks import MemoryTaskRepository
 from app.schemas.security import SecurityReview, SecurityStatus
+from app.schemas.skills import SkillRecord
 from app.schemas.validation import ValidationReport, ValidationStatus
+from app.services.coding_agent import CodingAgent
 from app.services.execution_pipeline import ExecutionPipeline, LocalExecutionDispatcher
 from app.services.execution_service import ExecutionService
+from app.services.skills import skill_fingerprint
 
 
 def test_policy_does_not_grant_coding_without_both_worker_permissions() -> None:
@@ -190,8 +194,47 @@ def test_local_pipeline_persists_observed_stage_results_and_keeps_target_clean(t
         )
         await tasks.create(task)
 
-        class FakeCoder:
-            async def edit(self, _task, workspace, **_kwargs):
+        skill_repository = MemorySkillRepository()
+        global_skill = SkillRecord(
+            id="global-style",
+            name="Global style",
+            description="Use consistent conventions.",
+            instructions="Keep edits focused.",
+            scope="global",
+            version=1,
+            created_at=now,
+            updated_at=now,
+            created_by="admin",
+            updated_by="admin",
+        )
+        repository_skill = SkillRecord(
+            id="sample-style",
+            name="Repository style",
+            description="Preserve repository language.",
+            instructions="Write concise Markdown.",
+            scope="repository",
+            repository_key="nexus_pay",
+            version=1,
+            created_at=now,
+            updated_at=now,
+            created_by="operator",
+            updated_by="operator",
+        )
+        disabled_skill = global_skill.model_copy(
+            update={"id": "disabled-style", "enabled": False}
+        )
+        unrelated_skill = repository_skill.model_copy(
+            update={"id": "other-style", "repository_key": "another-repo"}
+        )
+        for skill in (global_skill, repository_skill, disabled_skill, unrelated_skill):
+            await skill_repository.create(skill)
+
+        class FakeCoder(CodingAgent):
+            def __init__(self):
+                self.loaded_skill_ids = []
+
+            async def edit(self, _task, workspace, *, skills=None, **_kwargs):
+                self.loaded_skill_ids = [skill.id for skill in skills or []]
                 (workspace.path / "README.md").write_text(
                     "updated by isolated worker\n", encoding="utf-8"
                 )
@@ -231,13 +274,15 @@ def test_local_pipeline_persists_observed_stage_results_and_keeps_target_clean(t
                 await records.security_reviews.create(report)
                 return report
 
+        fake_coder = FakeCoder()
         pipeline = ExecutionPipeline(
             settings,
             tasks,
             records,
-            coder=FakeCoder(),
+            coder=fake_coder,
             validator=FakeValidator(),
             security=FakeSecurity(),
+            skills_repository=skill_repository,
         )
         dispatcher = LocalExecutionDispatcher(pipeline)
         service = ExecutionService(settings, tasks, records, dispatcher)
@@ -256,6 +301,13 @@ def test_local_pipeline_persists_observed_stage_results_and_keeps_target_clean(t
         assert final_task is not None and final_task.status == TaskStatus.APPROVED
         assert final_execution is not None and final_execution.status.value == "SUCCEEDED"
         assert final_execution.patch_fingerprint
+        assert fake_coder.loaded_skill_ids == ["global-style", "sample-style"]
+        skill_event = next(
+            event
+            for event in await records.activity_events.list_for_task(task.id)
+            if event.event_type == "coding.skills_resolved"
+        )
+        assert skill_event.metadata["skills"][0]["sha256"] == skill_fingerprint(global_skill)
         assert await records.validation_reports.get("validation-1") is not None
         assert await records.security_reviews.get("security-1") is not None
         assert _git(target_path, "rev-parse", "HEAD") == initial_sha

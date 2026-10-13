@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from app.core.config import Settings
+from app.core.config import RepositoryTarget, Settings
 from app.core.errors import ErrorCode, NexusError
 from app.integrations.attachments import AttachmentStorage
 from app.models.task import (
@@ -152,7 +152,13 @@ class TaskPlanService:
         )
         return saved
 
-    async def clone(self, task: Task, request: UpdateExecutionPlanRequest, actor: str) -> Task:
+    async def clone(
+        self,
+        task: Task,
+        request: UpdateExecutionPlanRequest,
+        actor: str,
+        repository_target: RepositoryTarget | None = None,
+    ) -> Task:
         if task.execution_plan is None:
             raise NexusError(
                 ErrorCode.TASK_CONFLICT,
@@ -162,7 +168,7 @@ class TaskPlanService:
         plan = self._plan(task, request)
         now = datetime.now(timezone.utc)
         title = (request.title or f"{task.title} (plan copy)").strip()[:200]
-        target = self.settings.approved_repositories.get(task.repository_key)
+        target = repository_target or self.settings.approved_repositories.get(task.repository_key)
         if target is None:
             raise NexusError(
                 ErrorCode.REPOSITORY_NOT_ALLOWED, "Repository is not approved.", status_code=422

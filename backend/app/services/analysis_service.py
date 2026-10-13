@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from app.core.config import RepositoryTarget, Settings
 from app.core.errors import ErrorCode, NexusError
 from app.core.logging import redact_credentials
 from app.integrations.gemini import GeminiAnalyzer, GeminiRateLimited, GeminiUnavailable
@@ -14,8 +14,8 @@ from app.policies.workforce import WorkforcePolicy
 from app.repositories.records import WorkflowRepositories
 from app.repositories.tasks import TaskRepository
 from app.schemas.execution import ActivityEvent, ActivitySource
-from app.services.workflow_service import WorkflowService
 from app.services.model_catalog import validate_model_id
+from app.services.workflow_service import WorkflowService
 
 
 class AnalysisService:
@@ -30,7 +30,13 @@ class AnalysisService:
         self.analyzer = analyzer or GeminiAnalyzer(settings)
         self.policy = WorkforcePolicy()
 
-    async def analyze(self, task: Task, actor: str, model_id: str | None = None) -> Task:
+    async def analyze(
+        self,
+        task: Task,
+        actor: str,
+        model_id: str | None = None,
+        repository_target: RepositoryTarget | None = None,
+    ) -> Task:
         model_id = validate_model_id(
             model_id, self.settings.gemini_analysis_model or self.settings.gemini_model
         )
@@ -47,7 +53,7 @@ class AnalysisService:
                 "Only backlog, failed, or blocked tasks can be analyzed.",
                 status_code=409,
             )
-        target = self.settings.approved_repositories.get(task.repository_key)
+        target = repository_target or self.settings.approved_repositories.get(task.repository_key)
         if target is None:
             raise NexusError(
                 ErrorCode.REPOSITORY_NOT_ALLOWED, "Repository is not approved.", status_code=422

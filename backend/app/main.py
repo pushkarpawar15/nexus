@@ -26,17 +26,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.core.auth import UserIdentity, require_admin, require_operator, require_viewer
-from app.core.config import ConfigurationError, Settings, get_settings, validate_settings
+from app.core.config import (
+    ConfigurationError,
+    RepositoryTarget,
+    Settings,
+    get_settings,
+    validate_settings,
+)
 from app.core.errors import ErrorCode, NexusError
 from app.core.logging import CorrelationIdMiddleware, configure_logging, redact_credentials
 from app.integrations.attachments import AttachmentStorage
 from app.integrations.github_app import GitHubAppError, GitHubAppIntegration
 from app.integrations.github_pat import GitHubPATError, GitHubPATIntegration
+from app.integrations.github_secrets import (
+    GoogleSecretManagerGitHubSecretStore,
+    MemoryGitHubSecretStore,
+)
 from app.models.task import Task, TaskAttachment, TaskPage, TaskStatus
+from app.repositories.github_connections import (
+    FirestoreGitHubConnectionRepository,
+    GitHubRepositoryConnection,
+    MemoryGitHubConnectionRepository,
+)
 from app.repositories.records import (
     create_firestore_workflow_repositories,
     create_memory_workflow_repositories,
 )
+from app.repositories.skills import FirestoreSkillRepository, MemorySkillRepository
 from app.repositories.tasks import (
     FirestoreTaskRepository,
     MemoryTaskRepository,
@@ -44,7 +60,8 @@ from app.repositories.tasks import (
 )
 from app.schemas.approval import ApprovalRequest
 from app.schemas.execution import ActivityEvent, ActivitySource, ExecutionModelRequest
-from app.schemas.github import GitHubPATConnectRequest
+from app.schemas.github import GitHubPATConnectRequest, GitHubRepositoryRemovalRequest
+from app.schemas.skills import SkillRecord, SkillWriteRequest
 from app.schemas.tasks import (
     AnalyzeTaskRequest,
     CreateTaskRequest,
@@ -60,8 +77,9 @@ from app.services.cloud_run_dispatcher import CloudRunJobsDispatcher
 from app.services.execution_pipeline import ExecutionPipeline, LocalExecutionDispatcher
 from app.services.execution_service import ExecutionService
 from app.services.github_pr_service import GitHubPRService
-from app.services.model_catalog import model_choices
 from app.services.langgraph_workflow import AsyncFirestoreCheckpointer
+from app.services.model_catalog import model_choices
+from app.services.skills import SkillService
 from app.services.task_mode_service import TaskModeService
 from app.services.task_plan_service import TaskPlanService
 from app.services.workflow_service import WorkflowService
@@ -100,20 +118,29 @@ def create_app(
     if repository is not None:
         task_repository = repository
         workflow_repositories = create_memory_workflow_repositories()
+        skills_repository = MemorySkillRepository()
+        github_connections = MemoryGitHubConnectionRepository()
     elif runtime_settings.storage == "firestore":
         task_repository: TaskRepository = FirestoreTaskRepository(
             client, runtime_settings.approved_repository_keys
         )
         workflow_repositories = create_firestore_workflow_repositories(client)
+        skills_repository = FirestoreSkillRepository(client)
+        github_connections = FirestoreGitHubConnectionRepository(client)
     else:
         task_repository = MemoryTaskRepository()
         workflow_repositories = create_memory_workflow_repositories()
+        skills_repository = MemorySkillRepository()
+        github_connections = MemoryGitHubConnectionRepository()
 
     attachment_storage = AttachmentStorage(runtime_settings)
     github_app = GitHubAppIntegration(runtime_settings, client)
     github_pat = GitHubPATIntegration()
-    configured_github_token = runtime_settings.github_token
-    configured_repositories = dict(runtime_settings.approved_repositories)
+    github_secret_store = (
+        GoogleSecretManagerGitHubSecretStore(runtime_settings)
+        if runtime_settings.storage == "firestore"
+        else MemoryGitHubSecretStore()
+    )
     github_pr_service = GitHubPRService(
         runtime_settings, task_repository, workflow_repositories, github_app=github_app
     )
@@ -130,6 +157,9 @@ def create_app(
                     attachment_storage=attachment_storage,
                     github_app=github_app,
                     github_pr_service=github_pr_service,
+                    skills_repository=skills_repository,
+                    github_connections=github_connections,
+                    github_secret_store=github_secret_store,
                     checkpointer=(
                         AsyncFirestoreCheckpointer(client)
                         if client is not None and runtime_settings.storage == "firestore"
@@ -163,9 +193,13 @@ def create_app(
     app.state.firestore_client = client
     app.state.task_repository = task_repository
     app.state.workflow_repositories = workflow_repositories
+    app.state.skills_repository = skills_repository
+    app.state.skill_service = SkillService(skills_repository)
     app.state.attachment_storage = attachment_storage
     app.state.github_app = github_app
     app.state.github_pat = github_pat
+    app.state.github_connections = github_connections
+    app.state.github_secret_store = github_secret_store
     app.state.analysis_service = AnalysisService(
         runtime_settings, task_repository, workflow_repositories
     )
@@ -189,7 +223,6 @@ def create_app(
     async def refresh_github_repository_allowlist(request: Request, call_next):
         if (
             runtime_settings.github_app_slug
-            and not github_pat.connected
             and request.url.path.startswith("/api/")
         ):
             try:
@@ -256,11 +289,112 @@ def create_app(
             response.headers["X-API-Version"] = "1"
         return response
 
-    async def get_task_or_404(task_id: str) -> Task:
-        task = await task_repository.get(task_id)
+    async def refresh_internal_repository_allowlist() -> frozenset[str]:
+        connections = await github_connections.list_all()
+        keys = runtime_settings.approved_repository_keys | frozenset(
+            connection.repository_key for connection in connections
+        )
+        setter = getattr(task_repository, "set_approved_repository_keys", None)
+        if setter:
+            setter(keys)
+        return keys
+
+    async def repository_keys_for_user(user: UserIdentity) -> frozenset[str]:
+        connections = await github_connections.list_for_user(user.uid)
+        await refresh_internal_repository_allowlist()
+        return runtime_settings.approved_repository_keys | frozenset(
+            connection.repository_key for connection in connections
+        )
+
+    async def repository_target_for_user(
+        user: UserIdentity, repository_key: str
+    ) -> RepositoryTarget | None:
+        connection = await github_connections.get(user.uid, repository_key)
+        if connection is not None:
+            return connection.target
+        return runtime_settings.approved_repositories.get(repository_key)
+
+    async def github_pr_service_for_user(user: UserIdentity, task: Task) -> GitHubPRService:
+        connection = await github_connections.get(user.uid, task.repository_key)
+        if connection is None:
+            return app.state.github_pr_service
+        token = await github_secret_store.get(connection.secret_name)
+        targets = dict(runtime_settings.approved_repositories)
+        targets[task.repository_key] = connection.target
+        user_settings = runtime_settings.model_copy(
+            update={"github_token": token, "approved_repositories": targets}
+        )
+        return GitHubPRService(
+            user_settings, task_repository, workflow_repositories, github_app=github_app
+        )
+
+    async def get_task_or_404(task_id: str, user: UserIdentity) -> Task:
+        task = await task_repository.get_for_repository_keys(
+            task_id, await repository_keys_for_user(user)
+        )
         if task is None:
             raise NexusError(ErrorCode.TASK_NOT_FOUND, "Task was not found.", status_code=404)
         return task
+
+    def repository_connection_payload(connection: GitHubRepositoryConnection) -> dict[str, Any]:
+        target = connection.target
+        return {
+            "key": connection.repository_key,
+            "label": target.label or f"{target.owner}/{target.repo}",
+            "owner": target.owner,
+            "repo": target.repo,
+            "base_branch": target.base_branch,
+            "private": bool(target.github_private),
+            "mode": "pat",
+            "account_login": connection.account_login,
+        }
+
+    async def pending_task_count(repository_key: str) -> int:
+        pending = {
+            TaskStatus.BACKLOG,
+            TaskStatus.ANALYZING,
+            TaskStatus.TRIAGED,
+            TaskStatus.READY,
+            TaskStatus.HUMAN_QUEUE,
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.VALIDATING,
+            TaskStatus.SECURITY_REVIEW,
+            TaskStatus.AWAITING_APPROVAL,
+            TaskStatus.AWAITING_INPUT,
+            TaskStatus.APPROVED,
+            TaskStatus.BLOCKED,
+            TaskStatus.FAILED,
+        }
+        count = 0
+        for task_status in pending:
+            _, total = await task_repository.list_for_repository_keys(
+                repository_keys=frozenset({repository_key}),
+                status=task_status,
+                limit=1,
+                offset=0,
+            )
+            count += total
+        return count
+
+    async def _validate_skill_repository(
+        scope: str, repository_key: str | None, user: UserIdentity
+    ) -> None:
+        if scope == "repository" and (
+            repository_key not in await repository_keys_for_user(user)
+        ):
+            raise NexusError(
+                ErrorCode.REPOSITORY_NOT_ALLOWED,
+                "The requested repository is not approved.",
+                status_code=422,
+            )
+
+    def _authorize_skill_scope(scope: str, user: UserIdentity) -> None:
+        if scope == "global" and user.role.value != "admin":
+            raise NexusError(
+                ErrorCode.HTTP_ERROR,
+                "Only administrators can manage global skills.",
+                status_code=403,
+            )
 
     @app.get("/api/models")
     async def get_model_choices(_: UserIdentity = Depends(require_viewer)):
@@ -268,14 +402,9 @@ def create_app(
 
     @app.get("/api/repositories")
     async def list_repositories(
-        _: UserIdentity = Depends(require_viewer),
+        user: UserIdentity = Depends(require_viewer),
     ) -> dict[str, list[dict[str, Any]]]:
-        if app.state.github_pat.connected and app.state.github_pat.target is not None:
-            target = app.state.github_pat.target
-            runtime_settings.approved_repositories = {
-                f"github-{target.github_repository_id}": target
-            }
-        elif app.state.github_app.configured:
+        if app.state.github_app.configured:
             connection = await app.state.github_app.status()
             if connection["connected"]:
                 try:
@@ -288,23 +417,76 @@ def create_app(
                 setter = getattr(task_repository, "set_approved_repository_keys", None)
                 if setter:
                     setter(runtime_settings.approved_repository_keys)
-        items = [
-            {
+        items: dict[str, dict[str, Any]] = {
+            key: {
                 "key": key,
                 "label": target.label or f"{target.owner}/{target.repo}",
                 "owner": target.owner,
                 "repo": target.repo,
                 "base_branch": target.base_branch,
                 "private": bool(target.github_private),
+                "mode": "app",
             }
-            for key, target in sorted(runtime_settings.approved_repositories.items())
-        ]
-        return {"items": items}
+            for key, target in runtime_settings.approved_repositories.items()
+        }
+        for connected in await github_connections.list_for_user(user.uid):
+            items[connected.repository_key] = repository_connection_payload(connected)
+        return {"items": [items[key] for key in sorted(items)]}
+
+    @app.get("/api/repositories/{repository_key}/removal-impact")
+    async def repository_removal_impact(
+        repository_key: str,
+        user: UserIdentity = Depends(require_operator),
+    ) -> dict[str, Any]:
+        connection = await github_connections.get(user.uid, repository_key)
+        if connection is None:
+            raise NexusError(
+                ErrorCode.REPOSITORY_NOT_ALLOWED, "Repository was not found.", status_code=404
+            )
+        return {
+            "repository_key": repository_key,
+            "pending_task_count": await pending_task_count(repository_key),
+        }
+
+    @app.delete("/api/repositories/{repository_key}", status_code=204)
+    async def remove_repository(
+        repository_key: str,
+        request: GitHubRepositoryRemovalRequest,
+        user: UserIdentity = Depends(require_operator),
+    ) -> Response:
+        connection = await github_connections.get(user.uid, repository_key)
+        if connection is None:
+            raise NexusError(
+                ErrorCode.REPOSITORY_NOT_ALLOWED, "Repository was not found.", status_code=404
+            )
+        pending_count = await pending_task_count(repository_key)
+        if pending_count and not request.confirm_pending_tasks:
+            raise NexusError(
+                ErrorCode.TASK_CONFLICT,
+                f"{pending_count} pending task(s) will be hidden until this repository is "
+                "reconnected.",
+                status_code=409,
+            )
+        await github_secret_store.delete(connection.secret_name)
+        await github_connections.delete(user.uid, repository_key)
+        await refresh_internal_repository_allowlist()
+        return Response(status_code=204)
 
     @app.get("/api/github/connection")
-    async def github_connection(_: UserIdentity = Depends(require_viewer)):
-        if app.state.github_pat.connected:
-            return app.state.github_pat.status()
+    async def github_connection(user: UserIdentity = Depends(require_viewer)):
+        pat_connections = await github_connections.list_for_user(user.uid)
+        if pat_connections:
+            repository = repository_connection_payload(pat_connections[0])
+            app_connection = await app.state.github_app.status()
+            return {
+                "configured": bool(app_connection["configured"]),
+                "connected": True,
+                "account_login": pat_connections[0].account_login,
+                "mode": "pat",
+                "repository": repository["label"],
+                "repository_info": repository,
+                "pat_supported": True,
+            }
         result = await app.state.github_app.status()
         result["mode"] = "app" if result["connected"] else None
         result["pat_supported"] = True
@@ -313,10 +495,10 @@ def create_app(
     @app.post("/api/github/pat")
     async def connect_github_pat(
         request: GitHubPATConnectRequest,
-        _: UserIdentity = Depends(require_operator),
+        user: UserIdentity = Depends(require_operator),
     ):
         try:
-            target, _ = await app.state.github_pat.connect(
+            target, login = await app.state.github_pat.connect(
                 request.token.get_secret_value(), request.owner, request.repo
             )
         except GitHubPATError as exc:
@@ -325,28 +507,51 @@ def create_app(
             raise HTTPException(
                 status_code=422, detail="Enter a valid GitHub owner and repository."
             ) from exc
-        runtime_settings.github_token = app.state.github_pat.token
-        runtime_settings.approved_repositories = {f"github-{target.github_repository_id}": target}
-        setter = getattr(task_repository, "set_approved_repository_keys", None)
-        if setter:
-            setter(runtime_settings.approved_repository_keys)
-        return app.state.github_pat.status()
+        repository_key = f"github-{target.github_repository_id}"
+        previous = await github_connections.get(user.uid, repository_key)
+        now = datetime.now(timezone.utc)
+        secret_digest = hashlib.sha256(f"{user.uid}:{repository_key}".encode()).hexdigest()[:32]
+        secret_name = f"nexus-github-{secret_digest}"
+        connection = GitHubRepositoryConnection(
+            user_id=user.uid,
+            account_login=login,
+            target=target,
+            secret_name=secret_name,
+            created_at=previous.created_at if previous else now,
+            updated_at=now,
+        )
+        await github_secret_store.put(secret_name, request.token)
+        try:
+            await github_connections.put(connection)
+        except Exception:
+            if previous is None:
+                await github_secret_store.delete(secret_name)
+            raise
+        await refresh_internal_repository_allowlist()
+        return {
+            "configured": True,
+            "connected": True,
+            "account_login": login,
+            "mode": "pat",
+            "repository": target.label,
+            "repository_info": repository_connection_payload(connection),
+            "pat_supported": True,
+        }
 
     @app.delete("/api/github/pat", status_code=204)
-    async def disconnect_github_pat(_: UserIdentity = Depends(require_operator)):
-        app.state.github_pat.disconnect()
-        runtime_settings.github_token = configured_github_token
-        runtime_settings.approved_repositories = dict(configured_repositories)
-        if app.state.github_app.configured:
-            connection = await app.state.github_app.status()
-            if connection["connected"]:
-                targets = await app.state.github_app.repositories()
-                runtime_settings.approved_repositories = {
-                    f"github-{target.github_repository_id}": target for target in targets
-                }
-        setter = getattr(task_repository, "set_approved_repository_keys", None)
-        if setter:
-            setter(runtime_settings.approved_repository_keys)
+    async def disconnect_github_pat(user: UserIdentity = Depends(require_operator)):
+        connections = await github_connections.list_for_user(user.uid)
+        for connection in connections:
+            if await pending_task_count(connection.repository_key):
+                raise NexusError(
+                    ErrorCode.TASK_CONFLICT,
+                    "Remove repositories individually after reviewing their pending tasks.",
+                    status_code=409,
+                )
+        for connection in connections:
+            await github_secret_store.delete(connection.secret_name)
+            await github_connections.delete(user.uid, connection.repository_key)
+        await refresh_internal_repository_allowlist()
         return Response(status_code=204)
 
     @app.post("/api/github/install-url")
@@ -403,7 +608,7 @@ def create_app(
         files: list[UploadFile] = File(...),
         user: UserIdentity = Depends(require_operator),
     ) -> dict[str, list[TaskAttachment]]:
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         if len(task.attachments) + len(files) > 10:
             raise HTTPException(status_code=413, detail="A task can have at most 10 attachments.")
         accepted_types = {
@@ -468,11 +673,100 @@ def create_app(
                     pass
             raise
 
+    @app.get("/api/skills")
+    async def list_skills(
+        repository_key: str | None = Query(default=None, min_length=1, max_length=150),
+        user: UserIdentity = Depends(require_viewer),
+    ) -> dict[str, list[SkillRecord]]:
+        if repository_key is not None and (
+            repository_key not in await repository_keys_for_user(user)
+        ):
+            raise NexusError(
+                ErrorCode.REPOSITORY_NOT_ALLOWED,
+                "The requested repository is not approved.",
+                status_code=422,
+            )
+        return {
+            "items": await app.state.skill_service.list_for_scope(repository_key),
+        }
+
+    @app.post("/api/skills", response_model=SkillRecord, status_code=status.HTTP_201_CREATED)
+    async def create_skill(
+        request: SkillWriteRequest,
+        user: UserIdentity = Depends(require_operator),
+    ) -> SkillRecord:
+        _authorize_skill_scope(request.scope, user)
+        await _validate_skill_repository(request.scope, request.repository_key, user)
+        now = datetime.now(timezone.utc)
+        record = SkillRecord(
+            id=uuid4().hex,
+            **request.model_dump(),
+            version=1,
+            created_at=now,
+            updated_at=now,
+            created_by=user.uid,
+            updated_by=user.uid,
+        )
+        return await skills_repository.create(record)
+
+    @app.patch("/api/skills/{skill_id}", response_model=SkillRecord)
+    async def update_skill(
+        skill_id: str,
+        request: SkillWriteRequest,
+        user: UserIdentity = Depends(require_operator),
+    ) -> SkillRecord:
+        current = await skills_repository.get(skill_id)
+        if current is None:
+            raise NexusError(ErrorCode.HTTP_ERROR, "Skill was not found.", status_code=404)
+        _authorize_skill_scope(current.scope, user)
+        _authorize_skill_scope(request.scope, user)
+        await _validate_skill_repository(request.scope, request.repository_key, user)
+        now = datetime.now(timezone.utc)
+        if now <= current.updated_at:
+            from datetime import timedelta
+
+            now = current.updated_at + timedelta(microseconds=1)
+        updated = SkillRecord(
+            id=current.id,
+            **request.model_dump(),
+            version=current.version + 1,
+            created_at=current.created_at,
+            updated_at=now,
+            created_by=current.created_by,
+            updated_by=user.uid,
+        )
+        try:
+            return await skills_repository.replace(updated, expected_updated_at=current.updated_at)
+        except RuntimeError as exc:
+            raise NexusError(
+                ErrorCode.TASK_CONFLICT, "Skill changed during this request.", status_code=409
+            ) from exc
+
+    @app.delete("/api/skills/{skill_id}", status_code=204)
+    async def delete_skill(
+        skill_id: str,
+        user: UserIdentity = Depends(require_operator),
+    ) -> None:
+        current = await skills_repository.get(skill_id)
+        if current is None:
+            raise NexusError(ErrorCode.HTTP_ERROR, "Skill was not found.", status_code=404)
+        _authorize_skill_scope(current.scope, user)
+        try:
+            deleted = await skills_repository.delete(
+                skill_id, expected_updated_at=current.updated_at
+            )
+        except RuntimeError as exc:
+            raise NexusError(
+                ErrorCode.TASK_CONFLICT, "Skill changed during this request.", status_code=409
+            ) from exc
+        if not deleted:
+            raise NexusError(ErrorCode.HTTP_ERROR, "Skill was not found.", status_code=404)
+
     @app.get("/api/tasks/{task_id}/attachments/{attachment_id}")
     async def download_task_attachment(
-        task_id: str, attachment_id: str, _: UserIdentity = Depends(require_viewer)
+        task_id: str, attachment_id: str, user: UserIdentity = Depends(require_viewer)
     ) -> Response:
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         attachment = next((item for item in task.attachments if item.id == attachment_id), None)
         if attachment is None:
             raise HTTPException(status_code=404, detail="Attachment was not found.")
@@ -491,9 +785,9 @@ def create_app(
 
     @app.delete("/api/tasks/{task_id}/attachments/{attachment_id}", status_code=204)
     async def delete_task_attachment(
-        task_id: str, attachment_id: str, _: UserIdentity = Depends(require_operator)
+        task_id: str, attachment_id: str, user: UserIdentity = Depends(require_operator)
     ) -> Response:
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         attachment = next((item for item in task.attachments if item.id == attachment_id), None)
         if attachment is None:
             raise HTTPException(status_code=404, detail="Attachment was not found.")
@@ -512,22 +806,27 @@ def create_app(
         request: CreateTaskRequest,
         user: UserIdentity = Depends(require_operator),
     ) -> Task:
-        if request.repository_key not in runtime_settings.approved_repository_keys:
+        if request.repository_key not in await repository_keys_for_user(user):
             raise NexusError(
                 ErrorCode.REPOSITORY_NOT_ALLOWED,
                 "The requested repository is not approved.",
                 status_code=422,
             )
         now = datetime.now(timezone.utc)
+        target = await repository_target_for_user(user, request.repository_key)
+        if target is None:
+            raise NexusError(
+                ErrorCode.REPOSITORY_NOT_ALLOWED,
+                "The requested repository is not connected to your account.",
+                status_code=422,
+            )
         task = Task(
             id=uuid4().hex,
             title=request.title,
             description=request.description,
             repository_key=request.repository_key,
             repository_label=(
-                runtime_settings.approved_repositories[request.repository_key].label
-                or f"{runtime_settings.approved_repositories[request.repository_key].owner}/"
-                f"{runtime_settings.approved_repositories[request.repository_key].repo}"
+                target.label or f"{target.owner}/{target.repo}"
             ),
             task_type=request.task_type,
             status=TaskStatus.BACKLOG,
@@ -542,9 +841,10 @@ def create_app(
         status_filter: TaskStatus | None = Query(default=None, alias="status"),
         limit: int = Query(default=25, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
-        _: UserIdentity = Depends(require_viewer),
+        user: UserIdentity = Depends(require_viewer),
     ) -> TaskPage:
-        items, total = await task_repository.list(
+        items, total = await task_repository.list_for_repository_keys(
+            repository_keys=await repository_keys_for_user(user),
             status=status_filter,
             limit=limit,
             offset=offset,
@@ -554,22 +854,15 @@ def create_app(
     @app.get("/api/tasks/{task_id}", response_model=Task)
     async def get_task(
         task_id: str,
-        _: UserIdentity = Depends(require_viewer),
+        user: UserIdentity = Depends(require_viewer),
     ) -> Task:
-        task = await task_repository.get(task_id)
-        if task is None:
-            raise NexusError(
-                ErrorCode.TASK_NOT_FOUND,
-                "Task was not found.",
-                status_code=404,
-            )
-        return task
+        return await get_task_or_404(task_id, user)
 
     @app.patch("/api/tasks/{task_id}", response_model=Task)
     async def update_task(
-        task_id: str, request: UpdateTaskRequest, _: UserIdentity = Depends(require_operator)
+        task_id: str, request: UpdateTaskRequest, user: UserIdentity = Depends(require_operator)
     ) -> Task:
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         if task.status != TaskStatus.BACKLOG:
             raise NexusError(
                 ErrorCode.TASK_CONFLICT,
@@ -578,7 +871,7 @@ def create_app(
             )
         if (
             request.repository_key
-            and request.repository_key not in runtime_settings.approved_repository_keys
+            and request.repository_key not in await repository_keys_for_user(user)
         ):
             raise NexusError(
                 ErrorCode.REPOSITORY_NOT_ALLOWED, "Repository is not approved.", status_code=422
@@ -599,8 +892,8 @@ def create_app(
             ) from exc
 
     @app.delete("/api/tasks/{task_id}", status_code=204)
-    async def delete_task(task_id: str, _: UserIdentity = Depends(require_operator)) -> None:
-        task = await get_task_or_404(task_id)
+    async def delete_task(task_id: str, user: UserIdentity = Depends(require_operator)) -> None:
+        task = await get_task_or_404(task_id, user)
         if task.status != TaskStatus.BACKLOG:
             raise NexusError(
                 ErrorCode.DELETION_NOT_ALLOWED,
@@ -620,7 +913,7 @@ def create_app(
     async def transition_task(
         task_id: str, request: TaskTransitionRequest, user: UserIdentity = Depends(require_operator)
     ) -> Task:
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         if request.to_status == TaskStatus.IN_PROGRESS and not (
             task.status == TaskStatus.HUMAN_QUEUE and task.mode and task.mode.value == "HUMAN"
         ):
@@ -639,7 +932,7 @@ def create_app(
         request: SetTaskModeRequest,
         user: UserIdentity = Depends(require_operator),
     ) -> Task:
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         return await app.state.task_mode_service.set_mode(
             task,
             request.mode,
@@ -654,7 +947,7 @@ def create_app(
         request: UpdateExecutionPlanRequest,
         user: UserIdentity = Depends(require_operator),
     ) -> Task:
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         return await app.state.task_plan_service.update(task, request, user.uid)
 
     @app.post("/api/tasks/{task_id}/plan/clone", response_model=Task, status_code=201)
@@ -663,8 +956,9 @@ def create_app(
         request: UpdateExecutionPlanRequest,
         user: UserIdentity = Depends(require_operator),
     ) -> Task:
-        task = await get_task_or_404(task_id)
-        return await app.state.task_plan_service.clone(task, request, user.uid)
+        task = await get_task_or_404(task_id, user)
+        target = await repository_target_for_user(user, task.repository_key)
+        return await app.state.task_plan_service.clone(task, request, user.uid, target)
 
     @app.post("/api/tasks/{task_id}/analyze", response_model=Task)
     async def analyze_task(
@@ -672,8 +966,11 @@ def create_app(
         request: AnalyzeTaskRequest = AnalyzeTaskRequest(),
         user: UserIdentity = Depends(require_operator),
     ) -> Task:
-        task = await get_task_or_404(task_id)
-        return await app.state.analysis_service.analyze(task, user.uid, request.model_id)
+        task = await get_task_or_404(task_id, user)
+        target = await repository_target_for_user(user, task.repository_key)
+        return await app.state.analysis_service.analyze(
+            task, user.uid, request.model_id, repository_target=target
+        )
 
     @app.post("/api/tasks/{task_id}/executions", response_model=None, status_code=201)
     async def start_execution(
@@ -681,7 +978,7 @@ def create_app(
         request: ExecutionModelRequest = ExecutionModelRequest(),
         user: UserIdentity = Depends(require_operator),
     ):
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         return await app.state.execution_service.start(task, user.uid, request.model_id)
 
     @app.post("/api/tasks/{task_id}/executions/retry", response_model=None, status_code=201)
@@ -690,7 +987,7 @@ def create_app(
         request: ExecutionModelRequest = ExecutionModelRequest(),
         user: UserIdentity = Depends(require_operator),
     ):
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         return await app.state.execution_service.retry(task, user.uid, request.model_id)
 
     @app.post("/api/tasks/{task_id}/input", response_model=None, status_code=201)
@@ -699,7 +996,7 @@ def create_app(
         request: HumanInputRequest,
         user: UserIdentity = Depends(require_operator),
     ):
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         if task.status == TaskStatus.AWAITING_INPUT and task.pending_execution_id is None:
             guidance = "\n\n".join(
                 value
@@ -733,7 +1030,10 @@ def create_app(
                     metadata={"guidance": redact_credentials(request.answer.strip())},
                 )
             )
-            return await app.state.analysis_service.analyze(updated, user.uid)
+            target = await repository_target_for_user(user, updated.repository_key)
+            return await app.state.analysis_service.analyze(
+                updated, user.uid, repository_target=target
+            )
         return await app.state.execution_service.provide_input(task, request.answer, user.uid)
 
     @app.post("/api/tasks/{task_id}/executions/{execution_id}/stop")
@@ -742,37 +1042,43 @@ def create_app(
         execution_id: str,
         user: UserIdentity = Depends(require_operator),
     ):
-        task = await get_task_or_404(task_id)
+        task = await get_task_or_404(task_id, user)
         return await app.state.execution_service.stop(task, execution_id, user.uid)
 
     @app.get("/api/tasks/{task_id}/executions")
-    async def list_task_executions(task_id: str, _: UserIdentity = Depends(require_viewer)):
-        await get_task_or_404(task_id)
+    async def list_task_executions(
+        task_id: str, user: UserIdentity = Depends(require_viewer)
+    ):
+        await get_task_or_404(task_id, user)
         records = await workflow_repositories.executions.list_for_task(task_id)
         return sorted(records, key=lambda item: (item.created_at, item.id))
 
     @app.get("/api/executions/{execution_id}")
-    async def get_execution(execution_id: str, _: UserIdentity = Depends(require_viewer)):
+    async def get_execution(execution_id: str, user: UserIdentity = Depends(require_viewer)):
         record = await workflow_repositories.executions.get(execution_id)
         if record is None:
             raise NexusError(
                 ErrorCode.EXECUTION_NOT_FOUND, "Execution was not found.", status_code=404
             )
+        await get_task_or_404(record.task_id, user)
         return record
 
     @app.get("/api/tasks/{task_id}/history")
-    async def task_history(task_id: str, _: UserIdentity = Depends(require_viewer)):
-        await get_task_or_404(task_id)
+    async def task_history(task_id: str, user: UserIdentity = Depends(require_viewer)):
+        await get_task_or_404(task_id, user)
         events = await workflow_repositories.activity_events.list_for_task(task_id)
         return sorted(events, key=lambda event: (event.occurred_at, event.id))
 
     @app.get("/api/executions/{execution_id}/activity")
-    async def execution_activity(execution_id: str, _: UserIdentity = Depends(require_viewer)):
+    async def execution_activity(
+        execution_id: str, user: UserIdentity = Depends(require_viewer)
+    ):
         record = await workflow_repositories.executions.get(execution_id)
         if record is None:
             raise NexusError(
                 ErrorCode.EXECUTION_NOT_FOUND, "Execution was not found.", status_code=404
             )
+        await get_task_or_404(record.task_id, user)
         events = await workflow_repositories.activity_events.list_for_task(record.task_id)
         return sorted(
             (event for event in events if event.execution_id == execution_id),
@@ -781,42 +1087,53 @@ def create_app(
 
     @app.get("/api/activity")
     async def recent_activity(
-        limit: int = Query(default=50, ge=1, le=200), _: UserIdentity = Depends(require_viewer)
+        limit: int = Query(default=50, ge=1, le=200),
+        user: UserIdentity = Depends(require_viewer),
     ):
         events = await workflow_repositories.activity_events.list_all(limit=5000)
+        visible_tasks, _ = await task_repository.list_for_repository_keys(
+            repository_keys=await repository_keys_for_user(user),
+            status=None,
+            limit=5000,
+            offset=0,
+        )
+        visible_ids = {task.id for task in visible_tasks}
+        events = [event for event in events if event.task_id in visible_ids]
         events.sort(key=lambda event: (event.occurred_at, event.id), reverse=True)
         return events[:limit]
 
     @app.get("/api/executions/{execution_id}/validation")
-    async def get_validation(execution_id: str, _: UserIdentity = Depends(require_viewer)):
+    async def get_validation(execution_id: str, user: UserIdentity = Depends(require_viewer)):
         record = await workflow_repositories.executions.get(execution_id)
         if record is None:
             raise NexusError(
                 ErrorCode.EXECUTION_NOT_FOUND, "Execution was not found.", status_code=404
             )
+        await get_task_or_404(record.task_id, user)
         reports = await workflow_repositories.validation_reports.list_for_task(record.task_id)
         matches = [report for report in reports if report.execution_id == execution_id]
         return max(matches, key=lambda item: (item.finished_at, item.id), default=None)
 
     @app.get("/api/executions/{execution_id}/security")
-    async def get_security(execution_id: str, _: UserIdentity = Depends(require_viewer)):
+    async def get_security(execution_id: str, user: UserIdentity = Depends(require_viewer)):
         record = await workflow_repositories.executions.get(execution_id)
         if record is None:
             raise NexusError(
                 ErrorCode.EXECUTION_NOT_FOUND, "Execution was not found.", status_code=404
             )
+        await get_task_or_404(record.task_id, user)
         reports = await workflow_repositories.security_reviews.list_for_task(record.task_id)
         matches = [report for report in reports if report.execution_id == execution_id]
         return max(matches, key=lambda item: (item.finished_at, item.id), default=None)
 
     @app.get("/api/executions/{execution_id}/diff")
-    async def get_execution_diff(execution_id: str, _: UserIdentity = Depends(require_viewer)):
+    async def get_execution_diff(execution_id: str, user: UserIdentity = Depends(require_viewer)):
         execution = await workflow_repositories.executions.get(execution_id)
         if execution is None:
             raise NexusError(
                 ErrorCode.EXECUTION_NOT_FOUND, "Execution was not found.", status_code=404
             )
-        task = await task_repository.get(execution.task_id)
+        task = await get_task_or_404(execution.task_id, user)
         if task is None or execution.repository_key != task.repository_key:
             raise NexusError(
                 ErrorCode.PUBLICATION_BLOCKED,
@@ -827,15 +1144,28 @@ def create_app(
         from app.services.execution_diff import ExecutionDiffError, read_execution_diff
 
         try:
+            target = await repository_target_for_user(user, task.repository_key)
+            diff_settings = (
+                runtime_settings.model_copy(
+                    update={
+                        "approved_repositories": {
+                            **runtime_settings.approved_repositories,
+                            task.repository_key: target,
+                        }
+                    }
+                )
+                if target is not None
+                else runtime_settings
+            )
             return await asyncio.to_thread(
-                read_execution_diff, runtime_settings, execution, pull_request
+                read_execution_diff, diff_settings, execution, pull_request
             )
         except ExecutionDiffError as exc:
             raise NexusError(ErrorCode.PUBLICATION_BLOCKED, str(exc), status_code=409) from exc
 
     @app.get("/api/tasks/{task_id}/approvals")
-    async def list_task_approvals(task_id: str, _: UserIdentity = Depends(require_viewer)):
-        await get_task_or_404(task_id)
+    async def list_task_approvals(task_id: str, user: UserIdentity = Depends(require_viewer)):
+        await get_task_or_404(task_id, user)
         records = await workflow_repositories.approvals.list_for_task(task_id)
         return sorted(records, key=lambda item: (item.decided_at, item.id))
 
@@ -846,49 +1176,56 @@ def create_app(
         request: ApprovalRequest,
         user: UserIdentity = Depends(require_admin),
     ):
+        task = await get_task_or_404(task_id, user)
         decision = await app.state.approval_service.decide(task_id, execution_id, user.uid, request)
         if decision.status.value == "APPROVED":
             try:
-                await app.state.github_pr_service.create(task_id, execution_id)
+                service = await github_pr_service_for_user(user, task)
+                await service.create(task_id, execution_id)
             except Exception:
                 # The approval is durable; the task detail view keeps a retry action for PRs.
                 pass
         return decision
 
     @app.get("/api/executions/{execution_id}/pull-request")
-    async def get_pull_request(execution_id: str, _: UserIdentity = Depends(require_viewer)):
+    async def get_pull_request(execution_id: str, user: UserIdentity = Depends(require_viewer)):
         execution = await workflow_repositories.executions.get(execution_id)
         if execution is None:
             raise NexusError(
                 ErrorCode.EXECUTION_NOT_FOUND, "Execution was not found.", status_code=404
             )
+        await get_task_or_404(execution.task_id, user)
         return await workflow_repositories.pull_requests.get(execution_id)
 
     @app.get("/api/executions/{execution_id}/pull-request-eligibility")
     async def pull_request_eligibility(
-        execution_id: str, _: UserIdentity = Depends(require_viewer)
+        execution_id: str, user: UserIdentity = Depends(require_viewer)
     ):
         execution = await workflow_repositories.executions.get(execution_id)
         if execution is None:
             raise NexusError(
                 ErrorCode.EXECUTION_NOT_FOUND, "Execution was not found.", status_code=404
             )
-        eligible, reason = await app.state.github_pr_service.eligibility(
-            execution.task_id, execution_id
-        )
+        task = await get_task_or_404(execution.task_id, user)
+        service = await github_pr_service_for_user(user, task)
+        eligible, reason = await service.eligibility(execution.task_id, execution_id)
         return {"eligible": eligible, "reason": reason}
 
     @app.post("/api/tasks/{task_id}/executions/{execution_id}/pull-request", status_code=201)
     async def create_pull_request(
-        task_id: str, execution_id: str, _: UserIdentity = Depends(require_operator)
+        task_id: str, execution_id: str, user: UserIdentity = Depends(require_operator)
     ):
-        return await app.state.github_pr_service.create(task_id, execution_id)
+        task = await get_task_or_404(task_id, user)
+        service = await github_pr_service_for_user(user, task)
+        return await service.create(task_id, execution_id)
 
     @app.post("/api/tasks/{task_id}/executions/{execution_id}/pull-request/sync")
     async def sync_pull_request(
-        task_id: str, execution_id: str, _: UserIdentity = Depends(require_operator)
+        task_id: str, execution_id: str, user: UserIdentity = Depends(require_operator)
     ):
-        return await app.state.github_pr_service.sync_pull_request(task_id, execution_id)
+        task = await get_task_or_404(task_id, user)
+        service = await github_pr_service_for_user(user, task)
+        return await service.sync_pull_request(task_id, execution_id)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

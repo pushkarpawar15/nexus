@@ -21,5 +21,6 @@ describe('application boot', () => {
 
     expect(screen.getByText('NEXUS')).toBeTruthy();
     expect(screen.getAllByText('Command Center').length).toBeGreaterThan(0);
+    expect(screen.getByText('Skills')).toBeTruthy();
   });
 });

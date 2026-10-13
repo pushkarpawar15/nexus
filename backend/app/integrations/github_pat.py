@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 
 import httpx
-from pydantic import SecretStr
 
 from app.core.config import RepositoryTarget
 
@@ -13,24 +12,7 @@ class GitHubPATError(RuntimeError):
 
 
 class GitHubPATIntegration:
-    """Process-local fine-grained PAT connection for one selected repository."""
-
-    def __init__(self) -> None:
-        self._token: SecretStr | None = None
-        self._target: RepositoryTarget | None = None
-        self._account_login: str | None = None
-
-    @property
-    def connected(self) -> bool:
-        return self._token is not None and self._target is not None
-
-    @property
-    def token(self) -> SecretStr | None:
-        return self._token
-
-    @property
-    def target(self) -> RepositoryTarget | None:
-        return self._target
+    """Validates fine-grained PAT access without retaining the supplied token."""
 
     async def connect(self, token: str, owner: str, repo: str) -> tuple[RepositoryTarget, str]:
         # Validate owner/repo before using them in a GitHub API path.
@@ -78,38 +60,7 @@ class GitHubPATIntegration:
             github_repository_id=repository_id,
             github_private=bool(repository_data.get("private", False)),
         )
-        self._token = SecretStr(token)
-        self._target = target
-        self._account_login = login
         return target, login
-
-    def status(self) -> dict[str, object]:
-        target = self._target
-        return {
-            "configured": True,
-            "connected": self.connected,
-            "account_login": self._account_login,
-            "mode": "pat" if self.connected else None,
-            "repository": target.label if target else None,
-            "repository_info": (
-                {
-                    "key": f"github-{target.github_repository_id}",
-                    "label": target.label or f"{target.owner}/{target.repo}",
-                    "owner": target.owner,
-                    "repo": target.repo,
-                    "base_branch": target.base_branch,
-                    "private": bool(target.github_private),
-                }
-                if target
-                else None
-            ),
-            "pat_supported": True,
-        }
-
-    def disconnect(self) -> None:
-        self._token = None
-        self._target = None
-        self._account_login = None
 
 
 __all__ = ["GitHubPATError", "GitHubPATIntegration"]
