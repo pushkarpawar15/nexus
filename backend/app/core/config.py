@@ -176,9 +176,7 @@ class Settings(BaseSettings):
     )
     cloud_build_service_agent: str | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "CLOUD_BUILD_SERVICE_AGENT", "cloud_build_service_agent"
-        ),
+        validation_alias=AliasChoices("CLOUD_BUILD_SERVICE_AGENT", "cloud_build_service_agent"),
     )
     cloud_build_worker_pool: str | None = Field(
         default=None,
@@ -221,7 +219,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("VALIDATION_NODE_IMAGE", "validation_node_image"),
     )
     coding_model_timeout_seconds: int = Field(
-        default=60,
+        default=180,
         ge=5,
         le=180,
         validation_alias=AliasChoices(
@@ -376,9 +374,7 @@ def validate_settings(settings: Settings) -> None:
         if settings.firestore_emulator_host or settings.firebase_auth_emulator_host:
             raise ConfigurationError("Emulators must not be enabled in production.")
         if settings.coding_enabled != settings.validation_enabled:
-            raise ConfigurationError(
-                "Coding and validation must be enabled or disabled together."
-            )
+            raise ConfigurationError("Coding and validation must be enabled or disabled together.")
         if settings.coding_enabled and settings.execution_backend != "cloud_run_jobs":
             raise ConfigurationError(
                 "Production execution requires NEXUS_EXECUTION_BACKEND=cloud_run_jobs."

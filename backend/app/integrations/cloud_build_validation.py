@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import tarfile
 import threading
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+from requests.exceptions import RequestException
 
 from app.core.config import Settings
+from app.core.logging import redact_credentials
 from app.integrations.validation_runner import (
     MAX_TOTAL_SOURCE_BYTES,
     _source_files,
@@ -26,6 +31,19 @@ from app.schemas.validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validation_source_archive(files: list[tuple[Path, Path]]) -> bytes:
+    source = io.BytesIO()
+    with tarfile.open(fileobj=source, mode="w:gz") as archive:
+        for relative, path in files:
+            info = archive.gettarinfo(str(path), arcname=relative.as_posix())
+            info.mode |= 0o444
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            with path.open("rb") as stream:
+                archive.addfile(info, stream)
+    return source.getvalue()
 
 
 class CloudBuildValidationRunner:
@@ -105,14 +123,7 @@ class CloudBuildValidationRunner:
             files = _source_files(workspace)
             if sum(path.stat().st_size for _, path in files) > MAX_TOTAL_SOURCE_BYTES:
                 raise ValueError("Validation source exceeds the 30 MiB total limit.")
-            source = io.BytesIO()
-            with tarfile.open(fileobj=source, mode="w:gz") as archive:
-                for relative, path in files:
-                    info = archive.gettarinfo(str(path), arcname=relative.as_posix())
-                    info.uid = info.gid = 0
-                    info.uname = info.gname = ""
-                    with path.open("rb") as stream:
-                        archive.addfile(info, stream)
+            source = _validation_source_archive(files)
             project = self.settings.google_cloud_project
             if (
                 not project
@@ -124,13 +135,18 @@ class CloudBuildValidationRunner:
                 )
 
             session = self._session()
-            bucket_name = self._upload_source(project, execution.id, source.getvalue())
+            bucket_name = self._upload_source(project, execution.id, source)
             build = self._create_build(session, project, execution.id, bucket_name, commands)
             build_name = build["name"]
             with self._lock:
                 self._active[execution.id] = (session, build_name)
             completed = self._wait_build(session, build_name, execution.id)
-            results = self._results(commands, completed)
+            log_excerpts = (
+                self._build_log_excerpts(session, project, completed, commands)
+                if _build_needs_diagnostics(completed)
+                else {}
+            )
+            results = self._results(commands, completed, log_excerpts)
             if completed.get("status") == "SUCCESS" and all(
                 result.status == ValidationCommandStatus.PASSED for result in results
             ):
@@ -140,8 +156,7 @@ class CloudBuildValidationRunner:
                 overall = ValidationStatus.BLOCKED
                 summary = "Cloud validation was stopped by an operator."
             elif any(
-                result.status
-                in {ValidationCommandStatus.FAILED, ValidationCommandStatus.TIMED_OUT}
+                result.status in {ValidationCommandStatus.FAILED, ValidationCommandStatus.TIMED_OUT}
                 for result in results
             ):
                 overall = ValidationStatus.FAILED
@@ -164,7 +179,8 @@ class CloudBuildValidationRunner:
                 self._result(
                     command.command_id,
                     ValidationCommandStatus.UNAVAILABLE,
-                    "Cloud validation could not complete; check the worker and Cloud Build settings.",
+                    "Cloud validation could not complete; check the worker and "
+                    "Cloud Build settings.",
                 )
                 for command in commands
             ]
@@ -212,7 +228,10 @@ class CloudBuildValidationRunner:
         policy.bindings.append(
             {
                 "role": "roles/storage.objectViewer",
-                "members": [f"serviceAccount:{self.settings.cloud_build_service_agent}"],
+                "members": [
+                    f"serviceAccount:{self.settings.cloud_build_service_agent}",
+                    f"serviceAccount:{self.settings.cloud_build_service_account}",
+                ],
             }
         )
         bucket.set_iam_policy(policy)
@@ -235,8 +254,7 @@ class CloudBuildValidationRunner:
             "source": {"storageSource": {"bucket": bucket, "object": "source.tar.gz"}},
             "steps": steps,
             "serviceAccount": (
-                f"projects/{project}/serviceAccounts/"
-                f"{self.settings.cloud_build_service_account}"
+                f"projects/{project}/serviceAccounts/{self.settings.cloud_build_service_account}"
             ),
             "options": {
                 "logging": "CLOUD_LOGGING_ONLY",
@@ -246,15 +264,43 @@ class CloudBuildValidationRunner:
             "tags": ["nexus-validation", "execution-" + execution_id[:32]],
         }
         response = session.post(
-            f"https://cloudbuild.googleapis.com/v1/projects/{project}/builds",
+            "https://cloudbuild.googleapis.com/v1/projects/"
+            f"{project}/locations/{self.settings.cloud_build_validation_location}/builds",
             json=request,
             timeout=30,
         )
         if response.status_code >= 400:
-            raise RuntimeError(f"Cloud Build rejected validation (HTTP {response.status_code}).")
+            try:
+                error_response = response.json()
+            except ValueError:
+                error_response = {}
+            provider_message = (
+                error_response.get("error", {}).get("message", "")
+                if isinstance(error_response, dict)
+                and isinstance(error_response.get("error"), dict)
+                else ""
+            )
+            provider_message = " ".join(redact_credentials(str(provider_message)).split())[:1000]
+            detail = f": {provider_message}" if provider_message else ""
+            raise RuntimeError(
+                f"Cloud Build rejected validation (HTTP {response.status_code}){detail}."
+            )
         data = response.json()
-        if not data.get("name"):
+        name = data.get("name")
+        if not isinstance(name, str) or not name:
             raise RuntimeError("Cloud Build did not return a build name.")
+        operation_prefix = f"operations/build/{project}/"
+        if name.startswith(operation_prefix):
+            encoded_build_id = name.removeprefix(operation_prefix)
+            try:
+                padded_build_id = encoded_build_id + "=" * (-len(encoded_build_id) % 4)
+                build_id = str(UUID(base64.urlsafe_b64decode(padded_build_id).decode("ascii")))
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise RuntimeError("Cloud Build returned an invalid build operation name.") from exc
+            data["name"] = (
+                f"projects/{project}/locations/"
+                f"{self.settings.cloud_build_validation_location}/builds/{build_id}"
+            )
         return data
 
     def _wait_build(self, session, name: str, execution_id: str):
@@ -289,7 +335,75 @@ class CloudBuildValidationRunner:
         storage.Client().bucket(bucket_name).delete(force=True)
 
     @staticmethod
-    def _results(commands, build):
+    def _build_log_excerpts(session, project: str, build: dict, commands) -> dict[str, str]:
+        build_id = build.get("id")
+        if not isinstance(build_id, str) or not build_id:
+            logger.warning("Cloud Build response omitted its ID; repair logs are unavailable.")
+            return {}
+        try:
+            response = session.post(
+                "https://logging.googleapis.com/v2/entries:list",
+                json={
+                    "resourceNames": [f"projects/{project}"],
+                    "filter": (
+                        'resource.type="build" AND '
+                        f'resource.labels.project_id="{project}" AND '
+                        f'resource.labels.build_id="{build_id}"'
+                    ),
+                    "orderBy": "timestamp asc",
+                    "pageSize": 500,
+                },
+                timeout=20,
+            )
+        except RequestException:
+            logger.exception("Could not fetch Cloud Build repair logs (build_id=%s).", build_id)
+            return {}
+        if response.status_code >= 400:
+            logger.warning(
+                "Could not fetch Cloud Build repair logs (HTTP %s, build_id=%s).",
+                response.status_code,
+                build_id,
+            )
+            return {}
+        try:
+            payload = response.json()
+        except ValueError:
+            logger.warning("Cloud Logging returned invalid JSON (build_id=%s).", build_id)
+            return {}
+        if not isinstance(payload, Mapping):
+            logger.warning("Cloud Logging returned an invalid response (build_id=%s).", build_id)
+            return {}
+        entries = payload.get("entries", [])
+        if not isinstance(entries, list):
+            logger.warning(
+                "Cloud Logging returned an invalid entries list (build_id=%s).",
+                build_id,
+            )
+            return {}
+
+        excerpts: dict[str, list[str]] = {command.command_id: [] for command in commands}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            labels = entry.get("labels")
+            text = entry.get("textPayload")
+            if not isinstance(labels, dict) or not isinstance(text, str):
+                continue
+            step = labels.get("build_step", "")
+            for command in commands:
+                if command.command_id in step:
+                    excerpts[command.command_id].append(text)
+                    break
+
+        return {
+            command_id: " ".join(redact_credentials("\n".join(lines)).split())[-1500:]
+            for command_id, lines in excerpts.items()
+            if lines
+        }
+
+    @staticmethod
+    def _results(commands, build, log_excerpts: dict[str, str] | None = None):
+        log_excerpts = log_excerpts or {}
         status_map = {
             "SUCCESS": ValidationCommandStatus.PASSED,
             "FAILURE": ValidationCommandStatus.FAILED,
@@ -323,6 +437,7 @@ class CloudBuildValidationRunner:
                         if status == ValidationCommandStatus.PASSED
                         else f"Cloud Build step status: {raw}."
                     ),
+                    stderr_excerpt=log_excerpts.get(command.command_id, ""),
                 )
             )
         return results
@@ -347,3 +462,14 @@ class CloudBuildValidationRunner:
 
 
 __all__ = ["CloudBuildValidationRunner"]
+
+
+def _build_needs_diagnostics(build: Mapping[str, object]) -> bool:
+    if build.get("status") != "SUCCESS":
+        return True
+    steps = build.get("steps", [])
+    return isinstance(steps, list) and any(
+        isinstance(step, Mapping)
+        and step.get("status") in {"FAILURE", "TIMEOUT", "INTERNAL_ERROR", "EXPIRED"}
+        for step in steps
+    )

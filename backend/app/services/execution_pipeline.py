@@ -249,9 +249,7 @@ class ExecutionPipeline:
             ) -> None:
                 await self._event(task.id, execution.id, kind, message, metadata)
 
-            edit_options = {
-                "model_id": execution.model_id or self.settings.gemini_coding_model
-            }
+            edit_options = {"model_id": execution.model_id or self.settings.gemini_coding_model}
             if attachments:
                 edit_options["attachments"] = attachments
             if isinstance(self.coder, CodingAgent):
@@ -260,7 +258,7 @@ class ExecutionPipeline:
                 task.id,
                 execution.id,
                 "coding.started",
-                "Starting the Antigravity coding stage.",
+                "Starting the configured coding model.",
             )
             if attachments:
                 stage = "coding"

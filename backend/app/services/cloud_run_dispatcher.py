@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -39,7 +38,7 @@ class CloudRunJobsDispatcher:
         try:
             execution_name = await asyncio.to_thread(self._start_job, execution_id)
             execution = await self.records.executions.get(execution_id)
-            if execution is not None:
+            if execution is not None and execution_name is not None:
                 await self.records.executions.replace(
                     execution.model_copy(
                         update={
@@ -56,7 +55,7 @@ class CloudRunJobsDispatcher:
             )
             return False
 
-    def _start_job(self, execution_id: str) -> str:
+    def _start_job(self, execution_id: str) -> str | None:
         session = self._session()
         response = session.post(
             f"https://run.googleapis.com/v2/{self._job_name}:run",
@@ -81,36 +80,14 @@ class CloudRunJobsDispatcher:
         operation_name = operation.get("name")
         if not isinstance(operation_name, str):
             raise RuntimeError("Cloud Run did not return an execution operation name.")
-        operation_url = "https://run.googleapis.com/v2/" + quote(operation_name, safe="/")
-        deadline = time.monotonic() + 90
-        while time.monotonic() < deadline:
-            result = session.get(operation_url, timeout=20)
-            if result.status_code >= 400:
-                raise RuntimeError(
-                    f"Could not read Cloud Run dispatch operation (HTTP {result.status_code})."
-                )
-            operation = result.json()
-            if operation.get("done"):
-                if operation.get("error"):
-                    # Cloud Run may finish the run operation with an execution
-                    # error when the container exits during startup. If it
-                    # created the execution, dispatch was accepted; the worker
-                    # must report its own failure through the execution record.
-                    name = self._find_execution(session, execution_id)
-                    if name:
-                        return name
-                    raise RuntimeError("Cloud Run could not start the execution job.")
-                response_data = operation.get("response") or {}
-                metadata = operation.get("metadata") or {}
-                name = response_data.get("name") or metadata.get("name")
-                if isinstance(name, str) and "/executions/" in name:
-                    return name
-                name = self._find_execution(session, execution_id)
-                if name:
-                    return name
-                raise RuntimeError("Cloud Run started the job but returned no execution name.")
-            time.sleep(1)
-        raise TimeoutError("Cloud Run did not confirm job dispatch within 90 seconds.")
+        if operation.get("error"):
+            raise RuntimeError("Cloud Run could not start the execution job.")
+        response_data = operation.get("response") or {}
+        metadata = operation.get("metadata") or {}
+        name = response_data.get("name") or metadata.get("name")
+        if isinstance(name, str) and "/executions/" in name:
+            return name
+        return None
 
     def _find_execution(self, session: Any, execution_id: str) -> str | None:
         response = session.get(

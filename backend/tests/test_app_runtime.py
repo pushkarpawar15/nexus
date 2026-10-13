@@ -138,7 +138,7 @@ def test_storage_is_required_and_empty_optional_environment_values_are_ignored(
         raise AssertionError("storage must be explicitly configured")
 
 
-def test_production_execution_flags_must_remain_disabled() -> None:
+def test_production_execution_requires_cloud_run_backend() -> None:
     settings = Settings(
         _env_file=None,
         environment="production",
@@ -147,13 +147,14 @@ def test_production_execution_flags_must_remain_disabled() -> None:
         firebase_project_id="demo-nexus",
         approved_repositories={"sample": {"owner": "example-org", "repo": "sample"}},
         coding_enabled=True,
+        validation_enabled=True,
     )
     try:
         validate_settings(settings)
     except ConfigurationError as exc:
-        assert "execution is unavailable" in str(exc)
+        assert "NEXUS_EXECUTION_BACKEND=cloud_run_jobs" in str(exc)
     else:
-        raise AssertionError("production execution should remain disabled")
+        raise AssertionError("production execution must use the Cloud Run backend")
 
 
 def test_firestore_app_factory_wires_the_workflow_collections() -> None:
@@ -242,3 +243,9 @@ def test_execution_workspace_must_be_absolute_and_outside_checkouts(tmp_path: Pa
 
     with pytest.raises(ConfigurationError, match="separate"):
         validate_settings(settings)
+
+
+def test_coding_model_timeout_defaults_to_three_minutes() -> None:
+    settings = Settings(_env_file=None, environment="testing", storage="memory")
+
+    assert settings.coding_model_timeout_seconds == 180

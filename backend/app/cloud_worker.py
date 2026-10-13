@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import signal
@@ -53,9 +54,7 @@ async def run_worker() -> None:
         task_repository = FirestoreTaskRepository(client, frozenset(allowed_targets))
         task = await task_repository.get(execution.task_id)
         if task is None:
-            raise RuntimeError(
-                "Task repository is no longer installed or approved in GitHub."
-            )
+            raise RuntimeError("Task repository is no longer installed or approved in GitHub.")
         settings.approved_repositories = allowed_targets
         settings.workspace_root = settings.workspace_root or Path("/tmp/nexus-workspaces")
         settings.workspace_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -111,7 +110,9 @@ async def run_worker() -> None:
                 expected_updated_at=finished.updated_at,
             )
     finally:
-        await client.close()
+        close_result = client.close()
+        if inspect.isawaitable(close_result):
+            await close_result
 
 
 def main() -> None:

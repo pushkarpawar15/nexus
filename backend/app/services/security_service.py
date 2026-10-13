@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from app.schemas.security import (
 )
 from app.schemas.validation import ValidationReport, ValidationStatus
 
+logger = logging.getLogger(__name__)
 _CREDENTIAL_NAME = re.compile(
     r"(?i)(^|/)(\.env(?:\.|$)|id_rsa|id_ed25519|credentials?\.json|secrets?\.)"
 )
@@ -168,14 +170,16 @@ class SecurityService:
                     status,
                     "Security review completed.",
                 )
-            except Exception:
+            except Exception as exc:
+                failure = _safe_review_text(f"{type(exc).__name__}: {exc}", 900)
+                logger.warning("Contextual security review failed: %s", failure)
                 report = self._report(
                     task.id,
                     execution.id,
                     execution.patch_fingerprint,
                     started,
                     findings,
-                    limitations,
+                    [*limitations[:11], f"Contextual review failed: {failure}"],
                     SecurityStatus.BLOCKED,
                     "Contextual security review was unavailable or invalid.",
                 )

@@ -55,7 +55,7 @@ Disconnecting removes the stored installation link. Uninstalling the app in GitH
 
 ## 4. Add task attachments
 
-Task creation and task details accept up to ten files, 10 MB each and 20 MB total: PDF, PNG, JPEG, WebP, GIF, plain text, Markdown, CSV, and JSON. Files are private, scoped to their task, and available for authorized download/removal. Before coding, the Antigravity adapter passes them to Gemini as document/image inputs. Attachments are treated as untrusted context; the agent has no built-in shell or filesystem tools and can only return bounded, validated file operations.
+Task creation and task details accept up to ten files, 10 MB each and 20 MB total: PDF, PNG, JPEG, WebP, GIF, plain text, Markdown, CSV, and JSON. Files are private, scoped to their task, and available for authorized download/removal. Before coding, the Vertex AI adapter passes them to Gemini as document/image inputs. Attachments are treated as untrusted context; the model has no shell or filesystem tools and can only return bounded, validated file operations.
 
 Local development stores files under `ATTACHMENTS_ROOT`. Production requires a private `ATTACHMENTS_BUCKET` and grants the API service identity object access to that bucket.
 

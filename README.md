@@ -49,7 +49,7 @@ npm run dev
 
 Open `http://localhost:5173`. Vite proxies `/api`, `/health`, and `/ready` to `127.0.0.1:8000`. `GET /health` checks process liveness; `GET /api/ready` checks the configured store and returns 503 if Firestore is unavailable. API task and repository reads require a Firebase ID token.
 
-The app includes task and workflow views, GitHub App repository connection, attachment upload/download/removal, Gemini analysis, Antigravity coding, isolated validation, approval, and PR publication. Files are stored privately and passed to Antigravity as multimodal input. See [GitHub and task attachments setup](docs/github-and-attachments.md) before enabling the local worker. The example configuration intentionally keeps coding and validation disabled until a local workspace and validator images are configured.
+The app includes task and workflow views, GitHub App repository connection, attachment upload/download/removal, Gemini analysis and structured coding proposals, isolated validation, approval, and PR publication. Files are stored privately and passed to Vertex AI as multimodal input. See [GitHub and task attachments setup](docs/github-and-attachments.md) before enabling the local worker. The example configuration intentionally keeps coding and validation disabled until a local workspace and validator images are configured.
 
 ## Configuration boundaries
 
@@ -86,4 +86,4 @@ The backend test suite covers policy enforcement, authenticated API behavior, an
 
 ## Hosted boundary
 
-`backend/Dockerfile` and Firebase Hosting configuration describe the deployment shape. For Cloud Run, keep both execution flags disabled: the coding dispatcher currently runs as a local in-process worker and does not have a durable hosted queue or workspace handoff. Local execution and GitHub publication require Gemini, Docker, workspace, and backend-only GitHub App configuration. Production attachments require a private GCS bucket. A deployment must not be represented as having run code execution unless a durable isolated worker has completed it.
+`backend/Dockerfile` and Firebase Hosting configuration describe the deployment shape. Hosted coding and validation are supported through the Cloud Run Job worker and Cloud Build; follow the [deployment guide](docs/cloud-execution.md) before enabling both execution flags in production. Local execution uses an in-process worker and requires a configured workspace and validator images. Production attachments require a private GCS bucket. A task must not be reported as completed until its isolated worker and required validation gates have finished.

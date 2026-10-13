@@ -50,9 +50,9 @@ BUILD_SA="nexus-build@$PROJECT_ID.iam.gserviceaccount.com"
 
 Grant the API identity Firestore access, object read/write access to the attachments bucket, and permission to start/read/cancel executions of the one NEXUS Cloud Run Job. A project-level `roles/run.developer` is a quick start; replace it with a custom role limited to `run.jobs.runWithOverrides`, `run.executions.get`, and `run.executions.cancel` once deployed.
 
-The worker identity needs Firestore read/write, Vertex AI User (`roles/aiplatform.user`), access to the private attachments bucket, permission to create Cloud Builds (`roles/cloudbuild.builds.editor`), and `roles/iam.serviceAccountUser` on `nexus-build`. It also needs temporary bucket creation and bucket-IAM management for per-validation source buckets; grant `roles/storage.admin` only to this worker identity, not the API. The worker account needs access to the GitHub App secrets described below.
+The worker identity needs Firestore read/write, Vertex AI User (`roles/aiplatform.user`), access to the private attachments bucket, permission to create Cloud Builds (`roles/cloudbuild.builds.editor`), Cloud Logging Viewer (`roles/logging.viewer`) to read failed validation diagnostics for automated repair, and `roles/iam.serviceAccountUser` on `nexus-build`. It also needs temporary bucket creation and bucket-IAM management for per-validation source buckets; grant `roles/storage.admin` only to this worker identity, not the API. The worker account needs access to the GitHub App secrets described below.
 
-The build-step identity needs `roles/logging.logWriter` and `roles/artifactregistry.reader`. It receives no access to source buckets. The Cloud Build service agent is granted `roles/storage.objectViewer` on the one temporary source bucket for each build, then that bucket is deleted. This keeps task code running in build steps from inheriting access to other active task sources. Cloud Build's service agent must be enabled for the project and allowed to use the selected private worker pool.
+The build-step identity needs `roles/logging.logWriter` and `roles/artifactregistry.reader`. For each validation, both this identity and the Cloud Build service agent receive `roles/storage.objectViewer` on that build's temporary source bucket so Cloud Build can stage the source before starting the steps. The bucket is deleted after the build; this does not grant access to other active task sources. Cloud Build's service agent must be enabled for the project and allowed to use the selected private worker pool.
 
 After the private pool exists, grant the worker permission to use that pool. Grant the API bucket access on the existing private attachments bucket:
 
@@ -71,6 +71,7 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$A
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/datastore.user
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/aiplatform.user
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/cloudbuild.builds.editor
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/logging.viewer
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/storage.admin
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$BUILD_SA" --role=roles/logging.logWriter
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$BUILD_SA" --role=roles/artifactregistry.reader
@@ -162,6 +163,7 @@ GOOGLE_CLOUD_LOCATION=asia-south1
 GEMINI_ANALYSIS_MODEL=<supported Vertex model ID>
 GEMINI_CODING_MODEL=<supported Vertex model ID>
 CODING_MODEL_LOCATION=global
+CODING_MODEL_TIMEOUT_SECONDS=180
 ATTACHMENTS_BUCKET=<private GCS bucket already used by NEXUS>
 NEXUS_EXECUTION_BACKEND=cloud_run_jobs
 NEXUS_CODING_ENABLED=true

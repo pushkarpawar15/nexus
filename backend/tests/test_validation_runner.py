@@ -114,6 +114,9 @@ def test_failed_command_stops_the_profile(tmp_path: Path, monkeypatch) -> None:
         stdout = io.BytesIO(b"test output")
         stderr = io.BytesIO(b"failure details")
 
+        def poll(self):
+            return 1
+
         def wait(self, timeout=None):
             return 1
 

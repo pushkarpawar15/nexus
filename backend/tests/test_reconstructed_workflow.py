@@ -191,7 +191,7 @@ def test_local_pipeline_persists_observed_stage_results_and_keeps_target_clean(t
         await tasks.create(task)
 
         class FakeCoder:
-            async def edit(self, _task, workspace):
+            async def edit(self, _task, workspace, **_kwargs):
                 (workspace.path / "README.md").write_text(
                     "updated by isolated worker\n", encoding="utf-8"
                 )
@@ -247,6 +247,9 @@ def test_local_pipeline_persists_observed_stage_results_and_keeps_target_clean(t
             completed = await records.executions.get(queued.id)
             if completed and completed.status.value in {"SUCCEEDED", "FAILED", "BLOCKED"}:
                 break
+        worker = dispatcher._tasks.get(queued.id)
+        if worker is not None:
+            await worker
         await dispatcher.close()
         final_task = await tasks.get(task.id)
         final_execution = await records.executions.get(queued.id)

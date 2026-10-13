@@ -12,8 +12,8 @@ The React/Vite app has the workflow routes, Firebase sign-in and role context, a
 | --- | --- | --- |
 | Web app | React + TypeScript + Vite, Firebase Hosting | Task intake, execution progress, evidence, approval and review experience. |
 | API | Python + FastAPI, Cloud Run | Authentication, configuration, task intake, workflow coordination and status reads. |
-| Model access | Gemini through Vertex AI or Gemini API | Structured analysis, contextual security findings, and Antigravity coding. |
-| Agent orchestration | NEXUS workflow services, LangGraph and Antigravity SDK | NEXUS services own task transitions and side effects; LangGraph checkpoints human-input interrupts; Antigravity returns bounded file operations with built-in system tools disabled. |
+| Model access | Gemini through Vertex AI or Gemini API | Structured analysis, contextual security findings, and schema-constrained coding proposals. |
+| Agent orchestration | NEXUS workflow services and LangGraph | NEXUS services own task transitions and side effects; LangGraph checkpoints human-input interrupts; the coding adapter returns bounded file operations through Vertex AI structured output. |
 | Durable workflow state | Firestore | Tasks, executions, activity, validation/security reports, approvals, PR records and LangGraph checkpoints. |
 | Coding and validation | Isolated local worker and prebuilt Docker validators | Disposable workspaces, bounded checks, actual test evidence. |
 | PR publication | GitHub App and GitHub API | Publish approved, validated changes to repositories selected during installation. |
