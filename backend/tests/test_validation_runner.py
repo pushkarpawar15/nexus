@@ -211,7 +211,7 @@ def test_repository_can_report_no_checks_after_inspecting_manifests() -> None:
     validation_runner._validate_agent_command_results(output, 2, 2)
 
 
-def test_validation_still_requires_completed_command_results() -> None:
+def test_validation_allows_unrelated_repository_discovery_commands() -> None:
     output = AgentValidationOutput(
         outcome="PASSED",
         summary="The repository checks passed.",
@@ -226,10 +226,35 @@ def test_validation_still_requires_completed_command_results() -> None:
         ],
     )
 
+    validation_runner._validate_agent_command_results(output, 4, 2)
+
+
+def test_validation_still_requires_a_result_for_each_reported_check() -> None:
+    output = AgentValidationOutput(
+        outcome="PASSED",
+        summary="The repository checks passed.",
+        checks=[
+            AgentValidationCheck(
+                name="pytest",
+                command="pytest -q",
+                status="PASSED",
+                exit_code=0,
+                summary="All tests passed.",
+            ),
+            AgentValidationCheck(
+                name="ruff",
+                command="ruff check .",
+                status="PASSED",
+                exit_code=0,
+                summary="No lint errors.",
+            ),
+        ],
+    )
+
     try:
-        validation_runner._validate_agent_command_results(output, 2, 1)
+        validation_runner._validate_agent_command_results(output, 4, 1)
     except ValueError as exc:
-        assert "command calls and results" in str(exc)
+        assert "2 validation checks" in str(exc)
     else:
         raise AssertionError("Validation must reject incomplete command results.")
 
@@ -252,6 +277,6 @@ def test_validation_cannot_claim_checks_without_running_commands() -> None:
     try:
         validation_runner._validate_agent_command_results(output, 0, 0)
     except ValueError as exc:
-        assert "without running commands" in str(exc)
+        assert "observed 0 command calls and 0 command results" in str(exc)
     else:
         raise AssertionError("Validation must reject checks with no command execution.")

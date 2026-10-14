@@ -231,10 +231,13 @@ def _validation_agent_policies() -> list[Policy]:
 def _validate_agent_command_results(
     output: AgentValidationOutput, command_calls: int, tool_result_count: int
 ) -> None:
-    if tool_result_count != command_calls:
-        raise ValueError("Antigravity command calls and results did not correspond.")
-    if output.checks and command_calls == 0:
-        raise ValueError("Antigravity reported validation checks without running commands.")
+    required_results = len(output.checks)
+    if command_calls < required_results or tool_result_count < required_results:
+        raise ValueError(
+            "Antigravity reported "
+            f"{required_results} validation checks, but observed {command_calls} command calls "
+            f"and {tool_result_count} command results."
+        )
 
 
 class AntigravityValidationRunner:
@@ -497,16 +500,19 @@ class AntigravityValidationRunner:
             )
             for check in output.checks
         ]
-        for index, tool_result in enumerate(tool_results[: len(results)]):
-            if tool_result:
-                result = results[index]
-                results[index] = result.model_copy(
-                    update={
-                        "stdout_excerpt": _redact_output(
-                            "\n".join(part for part in (result.stdout_excerpt, tool_result) if part)
-                        )
-                    }
-                )
+        if len(tool_results) == len(results):
+            for index, tool_result in enumerate(tool_results):
+                if tool_result:
+                    result = results[index]
+                    results[index] = result.model_copy(
+                        update={
+                            "stdout_excerpt": _redact_output(
+                                "\n".join(
+                                    part for part in (result.stdout_excerpt, tool_result) if part
+                                )
+                            )
+                        }
+                    )
         all_passed = (
             output.outcome == "PASSED"
             and bool(results)
