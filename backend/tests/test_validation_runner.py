@@ -62,18 +62,28 @@ def run_with_output(
     output: AgentValidationOutput,
     *,
     tool_results: list[str] | None = None,
+    dependency_setup=None,
 ):
     runner = AntigravityValidationRunner(
         Settings(_env_file=None, environment="testing", storage="memory")
     )
 
-    async def ask(_task, _execution, _workspace):
+    async def ask(_task, _execution, _workspace, **_kwargs):
         return output, tool_results or []
 
     runner._ask_antigravity = ask
     fingerprint = compute_patch_fingerprint(workspace)
     execution.patch_fingerprint = fingerprint
-    return runner.run(task, execution, workspace, expected_fingerprint=fingerprint)
+    original_prepare = validation_runner._prepare_locked_npm_dependencies
+
+    async def prepare(_workspace):
+        return dependency_setup or []
+
+    validation_runner._prepare_locked_npm_dependencies = prepare
+    try:
+        return runner.run(task, execution, workspace, expected_fingerprint=fingerprint)
+    finally:
+        validation_runner._prepare_locked_npm_dependencies = original_prepare
 
 
 def test_validation_discovers_repository_checks_without_a_profile(tmp_path: Path) -> None:
@@ -351,6 +361,129 @@ def test_blocked_validation_requires_evidence_of_an_environment_attempt() -> Non
         assert "observed 0 command calls and 0 command results" in str(exc)
     else:
         raise AssertionError("A blocked check must include observed environment evidence.")
+
+
+def test_host_locked_npm_setup_counts_as_blocked_environment_evidence() -> None:
+    output = AgentValidationOutput(
+        outcome="BLOCKED",
+        summary="Frontend checks need npm dependencies that could not be installed.",
+        checks=[
+            AgentValidationCheck(
+                name="Frontend test",
+                command="npm test",
+                status="UNEXECUTED",
+                summary="Locked dependencies were unavailable.",
+            )
+        ],
+    )
+
+    validation_runner._validate_agent_command_results(
+        output,
+        0,
+        0,
+        dependency_setup_attempted=True,
+    )
+
+
+def test_locked_npm_dependencies_use_registry_and_ignore_project_npmrc(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = make_workspace(tmp_path / "workspace")
+    (workspace / "package-lock.json").write_text(
+        '{"lockfileVersion":3,"packages":{"node_modules/vitest":'
+        '{"resolved":"https://registry.npmjs.org/vitest/-/vitest-1.0.0.tgz"}}}',
+        encoding="utf-8",
+    )
+    npmrc = workspace / ".npmrc"
+    npmrc.write_text("registry=https://untrusted.example\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class CompletedProcess:
+        returncode = 0
+
+        async def communicate(self):
+            captured["npmrc_hidden_during_install"] = not npmrc.exists()
+            return b"added 1 package", b""
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return CompletedProcess()
+
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-be-forwarded")
+    monkeypatch.setattr(
+        validation_runner.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    results = asyncio.run(
+        validation_runner._prepare_locked_npm_dependencies(
+            workspace,
+            timeout_seconds=30,
+        )
+    )
+
+    assert len(results) == 1
+    assert results[0].status == ValidationCommandStatus.PASSED
+    assert "--ignore-scripts" in results[0].command
+    assert "--registry=https://registry.npmjs.org" in results[0].command
+    assert captured["npmrc_hidden_during_install"] is True
+    assert npmrc.read_text(encoding="utf-8") == "registry=https://untrusted.example\n"
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert "GITHUB_TOKEN" not in kwargs["env"]
+
+
+def test_npm_lockfile_rejects_package_urls_outside_public_registry(tmp_path: Path) -> None:
+    lockfile = tmp_path / "package-lock.json"
+    lockfile.write_text(
+        '{"packages":{"node_modules/example":'
+        '{"resolved":"https://untrusted.example/example.tgz"}}}',
+        encoding="utf-8",
+    )
+
+    assert validation_runner._npm_lockfile_error(lockfile) == (
+        "npm lockfile references a package outside registry.npmjs.org."
+    )
+
+
+def test_validation_reports_locked_install_failure_as_blocked(tmp_path: Path) -> None:
+    task, execution = records()
+    workspace = make_workspace(tmp_path / "workspace")
+    output = AgentValidationOutput(
+        outcome="BLOCKED",
+        summary="Frontend checks were not run because npm dependency setup failed.",
+        checks=[
+            AgentValidationCheck(
+                name="Frontend test",
+                command="npm test",
+                status="UNEXECUTED",
+                summary="npm dependencies are unavailable.",
+            )
+        ],
+    )
+    setup_result = validation_runner.ValidationCommandResult(
+        command_id="npm-ci-frontend",
+        command="npm ci --ignore-scripts --no-audit --no-fund",
+        status=ValidationCommandStatus.FAILED,
+        exit_code=1,
+        error="Locked npm dependency installation failed.",
+    )
+
+    report = run_with_output(
+        task,
+        execution,
+        workspace,
+        output,
+        dependency_setup=[setup_result],
+    )
+
+    assert report.overall_status == ValidationStatus.BLOCKED
+    assert report.commands[0].command_id == "npm-ci-frontend"
+    assert report.commands[0].status == ValidationCommandStatus.FAILED
+    assert report.commands[1].status == ValidationCommandStatus.UNEXECUTED
 
 
 def test_validation_cannot_claim_checks_without_running_commands() -> None:

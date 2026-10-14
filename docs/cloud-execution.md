@@ -2,6 +2,8 @@
 
 NEXUS can run coding tasks without a developer machine or Docker daemon. The API dispatches each task to a Cloud Run Job. The worker clones the selected GitHub repository, calls Antigravity through Vertex AI to create a patch, then asks Antigravity to discover and run the repository's existing validation checks in a sandboxed copy of the workspace. No repository-specific validation profile, fixed command list, or prebuilt validator image is required. Firestore holds task and activity state, and GCS holds attachments plus a temporary validated workspace when a PR needs human approval or a retry. If the Antigravity command sandbox is unavailable, or no applicable checks can be run, validation blocks rather than treating the patch as passed.
 
+For npm projects, the worker provisions dependencies in the isolated validation copy from `package-lock.json` before starting the sandbox. It allows only `registry.npmjs.org`, disables lifecycle scripts, and does not pass worker credentials to npm. The Antigravity sandbox remains offline; if safe dependency setup fails, dependent checks are reported as unexecuted and validation is blocked.
+
 The API and worker run as separate Cloud Run identities. Do not put GitHub credentials or model credentials in Firebase Hosting or `VITE_*` settings. GitHub App installations remain workspace-wide. Fine-grained PAT repositories belong to the Firebase user who adds them; repository metadata is stored in Firestore and each PAT value is stored in Google Secret Manager. The API identity needs permission to create, update, read, and delete PAT secrets. The worker identity needs access to the `nexus-github-*` secrets so executions continue after instances restart.
 
 ## 1. Choose the GCP project and region
