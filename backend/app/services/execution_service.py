@@ -15,8 +15,8 @@ from app.policies.workforce import WorkforcePolicy
 from app.repositories.records import WorkflowRepositories
 from app.repositories.tasks import TaskRepository
 from app.schemas.execution import ActivityEvent, ActivitySource, ExecutionRecord, ExecutionStatus
-from app.services.workflow_service import WorkflowService
 from app.services.model_catalog import validate_model_id
+from app.services.workflow_service import WorkflowService
 
 
 class ExecutionService:
@@ -150,7 +150,13 @@ class ExecutionService:
     async def retry(
         self, task: Task, actor: str, model_id: str | None = None
     ) -> ExecutionRecord:
-        if task.status not in {TaskStatus.FAILED, TaskStatus.BLOCKED}:
+        interrupted_statuses = {
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.VALIDATING,
+            TaskStatus.SECURITY_REVIEW,
+        }
+        interrupted = task.status in interrupted_statuses
+        if task.status not in {TaskStatus.FAILED, TaskStatus.BLOCKED} and not interrupted:
             raise NexusError(
                 ErrorCode.EXECUTION_CONFLICT,
                 "Only failed or blocked tasks can retry execution.",
@@ -176,6 +182,24 @@ class ExecutionService:
                 f"{backend} coding and validation are disabled or unavailable. Configure the "
                 f"{backend} execution worker and validator before retrying execution.",
                 status_code=503,
+            )
+        if interrupted:
+            executions = await self.records.executions.list_for_task(task.id)
+            if not executions or executions[0].status != ExecutionStatus.CANCELLED:
+                raise NexusError(
+                    ErrorCode.EXECUTION_CONFLICT,
+                    "An active task can only be recovered when its latest execution was cancelled.",
+                    status_code=409,
+                )
+            task = await WorkflowService(self.tasks).transition(
+                task,
+                TaskStatus.BLOCKED,
+                actor=actor,
+                reason=(
+                    "The latest execution was cancelled before the task status was updated; "
+                    "operator retry is starting a fresh attempt."
+                ),
+                trusted=True,
             )
         ready = await WorkflowService(self.tasks).transition(
             task,
@@ -326,24 +350,24 @@ class ExecutionService:
                 current_execution,
                 expected_updated_at=expected_updated_at,
             )
-            current_task = await self.tasks.get(task.id)
-            if current_task and current_task.status in {
-                TaskStatus.IN_PROGRESS,
-                TaskStatus.VALIDATING,
-                TaskStatus.SECURITY_REVIEW,
-            }:
-                await WorkflowService(self.tasks).transition(
-                    current_task,
-                    TaskStatus.BLOCKED,
-                    actor=actor,
-                    reason="Execution stopped by an operator; its workspace was removed.",
-                    trusted=True,
-                )
             await self._event(
                 task.id,
                 execution.id,
                 "execution.cancelled",
                 "Execution stopped by an operator.",
+            )
+        current_task = await self.tasks.get(task.id)
+        if current_task and current_task.status in {
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.VALIDATING,
+            TaskStatus.SECURITY_REVIEW,
+        }:
+            await WorkflowService(self.tasks).transition(
+                current_task,
+                TaskStatus.BLOCKED,
+                actor=actor,
+                reason="Execution stopped by an operator; its workspace was removed.",
+                trusted=True,
             )
         return current_execution
 
