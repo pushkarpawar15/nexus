@@ -1495,6 +1495,9 @@ function TaskDetail() {
         .sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at))
     : [];
   const executionIsLive = ['QUEUED', 'RUNNING'].includes(latest?.status || '');
+  const executionNeedsRecovery =
+    ['IN_PROGRESS', 'VALIDATING', 'SECURITY_REVIEW'].includes(task.status) &&
+    latest?.status === 'CANCELLED';
   const staleValidation = Boolean(
     validation &&
     latest?.patch_fingerprint &&
@@ -1644,13 +1647,16 @@ function TaskDetail() {
               Stop execution
             </Button>
           )}
-          {['FAILED', 'BLOCKED'].includes(task.status) &&
+          {(['FAILED', 'BLOCKED'].includes(task.status) ||
+            executionNeedsRecovery) &&
             !task.pending_question &&
             task.execution_plan &&
             ['AI', 'HYBRID'].includes(task.mode || '') && (
               <Button loading={busy} onClick={() => void action('retry')}>
                 <Zap size={16} />
-                Retry execution
+                {executionNeedsRecovery
+                  ? 'Resume cancelled execution'
+                  : 'Retry execution'}
               </Button>
             )}
           {eligibility.eligible && (
