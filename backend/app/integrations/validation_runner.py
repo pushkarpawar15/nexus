@@ -231,10 +231,10 @@ def _validation_agent_policies() -> list[Policy]:
 def _validate_agent_command_results(
     output: AgentValidationOutput, command_calls: int, tool_result_count: int
 ) -> None:
-    if command_calls != len(output.checks) or tool_result_count != command_calls:
-        raise ValueError(
-            "Antigravity check results did not correspond to completed command executions."
-        )
+    if tool_result_count != command_calls:
+        raise ValueError("Antigravity command calls and results did not correspond.")
+    if output.checks and command_calls == 0:
+        raise ValueError("Antigravity reported validation checks without running commands.")
 
 
 class AntigravityValidationRunner:

@@ -183,16 +183,75 @@ def test_validation_policy_allows_only_configured_agent_tools() -> None:
     assert asyncio.run(decide(types.BuiltinTools.CREATE_FILE)).allow is False
 
 
-def test_no_checks_is_invalid_after_a_command_was_attempted() -> None:
+def test_repository_discovery_commands_need_not_each_be_a_validation_check() -> None:
+    output = AgentValidationOutput(
+        outcome="PASSED",
+        summary="The repository checks passed.",
+        checks=[
+            AgentValidationCheck(
+                name="pytest",
+                command="pytest -q",
+                status="PASSED",
+                exit_code=0,
+                summary="All tests passed.",
+            )
+        ],
+    )
+
+    validation_runner._validate_agent_command_results(output, 4, 4)
+
+
+def test_repository_can_report_no_checks_after_inspecting_manifests() -> None:
     output = AgentValidationOutput(
         outcome="NO_CHECKS",
-        summary="Command execution was denied by the environment policy.",
+        summary="No applicable repository checks were found.",
         checks=[],
     )
 
+    validation_runner._validate_agent_command_results(output, 2, 2)
+
+
+def test_validation_still_requires_completed_command_results() -> None:
+    output = AgentValidationOutput(
+        outcome="PASSED",
+        summary="The repository checks passed.",
+        checks=[
+            AgentValidationCheck(
+                name="pytest",
+                command="pytest -q",
+                status="PASSED",
+                exit_code=0,
+                summary="All tests passed.",
+            )
+        ],
+    )
+
     try:
-        validation_runner._validate_agent_command_results(output, 1, 1)
+        validation_runner._validate_agent_command_results(output, 2, 1)
     except ValueError as exc:
-        assert "completed command executions" in str(exc)
+        assert "command calls and results" in str(exc)
     else:
-        raise AssertionError("An attempted command must not be reported as NO_CHECKS.")
+        raise AssertionError("Validation must reject incomplete command results.")
+
+
+def test_validation_cannot_claim_checks_without_running_commands() -> None:
+    output = AgentValidationOutput(
+        outcome="PASSED",
+        summary="The repository checks passed.",
+        checks=[
+            AgentValidationCheck(
+                name="pytest",
+                command="pytest -q",
+                status="PASSED",
+                exit_code=0,
+                summary="All tests passed.",
+            )
+        ],
+    )
+
+    try:
+        validation_runner._validate_agent_command_results(output, 0, 0)
+    except ValueError as exc:
+        assert "without running commands" in str(exc)
+    else:
+        raise AssertionError("Validation must reject checks with no command execution.")
