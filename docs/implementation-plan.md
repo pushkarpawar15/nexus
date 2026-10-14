@@ -23,7 +23,7 @@ This plan records the reconstructed code and delivery boundaries. Incident Inves
 - Structured Gemini analysis with deterministic worker capability, risk, and approval policy.
 - Evidence-gated task state transitions, idempotent local execution dispatch, task history and activity APIs.
 - Disposable local Git workspaces, bounded structured code proposals, patch fingerprints, cleanup, and target checkout integrity checks.
-- Fixed-profile isolated Docker validation, persisted reports, static and model-assisted security review, and persisted execution results.
+- Antigravity-discovered repository validation in a sandboxed workspace, persisted reports, static and model-assisted security review, and persisted execution results.
 - Immutable, patch-specific admin approvals and checkpointed GitHub branch, commit, push, and pull request creation.
 - Consistent API error envelopes, correlation IDs, API-version headers, health and readiness endpoints.
 
@@ -41,10 +41,10 @@ This plan records the reconstructed code and delivery boundaries. Incident Inves
 
 ### 5. Isolated validation foundation
 
-- Validator builder reads only the four approved manifests from the separate PayFlow checkout and rejects symlinks, oversized files and credential-like contents.
-- Built `nexus-payflow-python-validator:local` and `nexus-payflow-node-validator:local`.
-- The runner stages bounded UTF-8 sources, checks the patch fingerprint before and after, uses fixed command argv in network-disabled, nonroot containers, limits output/resources/time, and stops on first failure.
-- All seven configured PayFlow checks passed in the isolated runner.
+- Antigravity inspects each repository and chooses applicable checks from its manifests, documentation, and existing scripts instead of using a repository-specific profile.
+- The runner stages a bounded source snapshot, excludes credentials and generated directories, and checks that the original patch fingerprint is unchanged before and after validation.
+- Antigravity can inspect the snapshot and invoke existing checks with its command tool; it cannot edit files or install dependencies, and execution is refused if the command sandbox is unavailable.
+- Validation reports include the discovered commands and results. Missing checks, missing runtimes, command failures, and sandbox errors do not satisfy the validation gate.
 
 ### 6. Persistence adapters
 

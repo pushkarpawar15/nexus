@@ -1,22 +1,21 @@
 # Cloud only execution on GCP
 
-NEXUS can run coding tasks without a developer machine, Docker daemon, or local workspace. The API dispatches each task to a Cloud Run Job. That worker clones the selected GitHub repository, calls the configured coding model through Vertex AI, and asks Cloud Build to run the fixed PayFlow validation profile. Firestore holds task and activity state, and GCS holds attachments plus a temporary validated workspace when a PR needs human approval or a retry.
+NEXUS can run coding tasks without a developer machine or Docker daemon. The API dispatches each task to a Cloud Run Job. The worker clones the selected GitHub repository, calls Antigravity through Vertex AI to create a patch, then asks Antigravity to discover and run the repository's existing validation checks in a sandboxed copy of the workspace. No repository-specific validation profile, fixed command list, or prebuilt validator image is required. Firestore holds task and activity state, and GCS holds attachments plus a temporary validated workspace when a PR needs human approval or a retry. If the Antigravity command sandbox is unavailable, or no applicable checks can be run, validation blocks rather than treating the patch as passed.
 
 The API and worker run as separate Cloud Run identities. Do not put GitHub credentials or model credentials in Firebase Hosting or `VITE_*` settings. GitHub App installations remain workspace-wide. Fine-grained PAT repositories belong to the Firebase user who adds them; repository metadata is stored in Firestore and each PAT value is stored in Google Secret Manager. The API identity needs permission to create, update, read, and delete PAT secrets. The worker identity needs access to the `nexus-github-*` secrets so executions continue after instances restart.
 
 ## 1. Choose the GCP project and region
 
-Use the Firebase project ID if Firebase Auth and Firestore are already enabled in that project. The commands below use `asia-south1` (Mumbai); Cloud Run Jobs, Cloud Build private pools, and Artifact Registry should use a compatible region. Set `PROJECT_ID` to your actual project ID:
+Use the Firebase project ID if Firebase Auth and Firestore are already enabled in that project. The commands below use `asia-south1` (Mumbai); Cloud Run Jobs and Artifact Registry should use a compatible region. Set `PROJECT_ID` to your actual project ID:
 
 ```sh
 gcloud config set project PROJECT_ID
 gcloud config set run/region asia-south1
 REGION=asia-south1
 PROJECT_ID="$(gcloud config get-value project)"
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 ```
 
-Confirm billing is active before enabling services. Cloud Run, Cloud Build private pools, Artifact Registry, Vertex AI, Firestore, Cloud Logging, and Cloud Storage can consume the free credits.
+Confirm billing is active before enabling services. Cloud Run, Cloud Build, Artifact Registry, Vertex AI, Firestore, Cloud Logging, and Cloud Storage can consume the free credits.
 
 ## 2. Enable APIs and create the image repository
 
@@ -28,7 +27,7 @@ gcloud services enable \
 
 gcloud artifacts repositories create nexus \
   --repository-format=docker --location="$REGION" \
-  --description="NEXUS API, worker, and validation images"
+  --description="NEXUS API and worker images"
 ```
 
 The project must already have a Firestore database and Firebase Authentication configured. Add the Firebase Hosting domain to Firebase Authentication's authorized domains and configure the Google sign-in provider in Firebase Console.
@@ -39,28 +38,21 @@ The project must already have a Firestore database and Firebase Authentication c
 gcloud iam service-accounts create nexus-api \
   --display-name="NEXUS API"
 gcloud iam service-accounts create nexus-worker \
-  --display-name="NEXUS task worker"
-gcloud iam service-accounts create nexus-build \
-  --display-name="NEXUS validation build steps"
+  --display-name="NEXUS task and validation worker"
 
 API_SA="nexus-api@$PROJECT_ID.iam.gserviceaccount.com"
 WORKER_SA="nexus-worker@$PROJECT_ID.iam.gserviceaccount.com"
-BUILD_SA="nexus-build@$PROJECT_ID.iam.gserviceaccount.com"
 ```
 
 Grant the API identity Firestore access, object read/write access to the attachments bucket, and permission to start/read/cancel executions of the one NEXUS Cloud Run Job. A project-level `roles/run.developer` is a quick start; replace it with a custom role limited to `run.jobs.runWithOverrides`, `run.executions.get`, and `run.executions.cancel` once deployed.
 
 The API identity needs Secret Manager permissions to get/list secrets, create secrets, add secret versions, access versions, and delete secrets. Prefer a custom role; a temporary `roles/secretmanager.admin` grant is broader than required.
 
-The worker identity needs Firestore read/write, Vertex AI User (`roles/aiplatform.user`), access to the private attachments bucket, permission to create Cloud Builds (`roles/cloudbuild.builds.editor`), Cloud Logging Viewer (`roles/logging.viewer`) to read failed validation diagnostics for automated repair, and `roles/iam.serviceAccountUser` on `nexus-build`. It also needs temporary bucket creation and bucket-IAM management for per-validation source buckets; grant `roles/storage.admin` only to this worker identity, not the API. Grant it Secret Manager accessor permission for the dynamically created `nexus-github-*` secrets; use an IAM condition limiting the resource name prefix or an equivalent custom role rather than granting access to unrelated secrets.
+The worker identity needs Firestore read/write, Vertex AI User (`roles/aiplatform.user`), access to the private attachments bucket, and Secret Manager accessor permission for the dynamically created `nexus-github-*` secrets. Use an IAM condition limiting access to those repository secrets, or an equivalent custom role, rather than granting access to unrelated secrets. The worker's Antigravity command sandbox must be available; validation stops safely if the runtime reports that sandboxing is unavailable.
 
-The build-step identity needs `roles/logging.logWriter` and `roles/artifactregistry.reader`. For each validation, both this identity and the Cloud Build service agent receive `roles/storage.objectViewer` on that build's temporary source bucket so Cloud Build can stage the source before starting the steps. The bucket is deleted after the build; this does not grant access to other active task sources. Cloud Build's service agent must be enabled for the project and allowed to use the selected private worker pool.
-
-After the private pool exists, grant the worker permission to use that pool. Grant the API bucket access on the existing private attachments bucket:
+Grant the API bucket access on the existing private attachments bucket:
 
 ```sh
-gcloud builds worker-pools add-iam-policy-binding POOL_NAME --region="$REGION" \
-  --member="serviceAccount:$WORKER_SA" --role=roles/cloudbuild.workerPoolUser
 gcloud storage buckets add-iam-policy-binding "gs://YOUR_PRIVATE_BUCKET" \
   --member="serviceAccount:$API_SA" --role=roles/storage.objectAdmin
 ```
@@ -72,35 +64,11 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$A
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$API_SA" --role=roles/run.developer
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/datastore.user
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/aiplatform.user
-gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/cloudbuild.builds.editor
-gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/logging.viewer
-gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$WORKER_SA" --role=roles/storage.admin
-gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$BUILD_SA" --role=roles/logging.logWriter
-gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$BUILD_SA" --role=roles/artifactregistry.reader
-gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA" \
-  --member="serviceAccount:$WORKER_SA" --role=roles/iam.serviceAccountUser
 ```
 
 Scope Firestore, bucket, Secret Manager, and `actAs` grants to the smallest resources possible. For production, replace broad project-level roles with custom roles and bucket-level bindings.
 
-## 4. Create the private Cloud Build worker pool
-
-The validator uses prebuilt, offline dependency images. First make the image builder available in Cloud Build by cloning the target PayFlow checkout in your secured build environment, then run the NEXUS-owned `backend/validation_images/build_images.py` script against it. Build and push the images to Artifact Registry. Only manifests enter the validator image build context; do not put repository secrets in those manifests.
-
-```sh
-PYTHON_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/nexus/payflow-python-validator:1"
-NODE_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/nexus/payflow-node-validator:1"
-```
-
-Create a private pool in the same region. Private pools have a separate cost; check the current GCP pricing and your remaining credits first. Set its egress option to `NO_PUBLIC_EGRESS` and provide private access to Google APIs, Artifact Registry, and Cloud Logging. Cloud Build pools otherwise allow public egress by default. The validation steps use offline dependency images and do not need GitHub credentials. Do not add Cloud NAT or a public proxy for this pool.
-
-Create a pool from Cloud Console (Cloud Build → Worker pools), or use `gcloud builds worker-pools create` with a private pool config that sets `egressOption: NO_PUBLIC_EGRESS`. Record its full name:
-
-```text
-projects/PROJECT_ID/locations/asia-south1/workerPools/POOL_NAME
-```
-
-## 5. Configure repository credentials in Secret Manager
+## 4. Configure repository credentials in Secret Manager
 
 Choose one of these options:
 
@@ -125,7 +93,7 @@ gcloud secrets add-iam-policy-binding nexus-github-app-private-key --member="ser
 
 For GitHub App, set a strong, separate `GITHUB_APP_WEBHOOK_SECRET` only if you configure webhooks. Keep the state secret stable between API revisions so pending installation callbacks remain verifiable. Do not configure a broad classic PAT.
 
-## 6. Build and deploy the API and worker images
+## 5. Build and deploy the API and worker images
 
 From the NEXUS repository root, submit the backend source to Cloud Build. The API and worker use separate Dockerfiles:
 
@@ -155,14 +123,9 @@ ATTACHMENTS_BUCKET=<private GCS bucket already used by NEXUS>
 NEXUS_EXECUTION_BACKEND=cloud_run_jobs
 NEXUS_CODING_ENABLED=true
 NEXUS_VALIDATION_ENABLED=true
+NEXUS_VALIDATION_TIMEOUT_SECONDS=1200
 CLOUD_RUN_EXECUTION_JOB=nexus-execution-worker
 CLOUD_RUN_EXECUTION_REGION=asia-south1
-CLOUD_BUILD_VALIDATION_LOCATION=asia-south1
-CLOUD_BUILD_VALIDATION_SERVICE_ACCOUNT=nexus-build@PROJECT_ID.iam.gserviceaccount.com
-CLOUD_BUILD_SERVICE_AGENT=service-PROJECT_NUMBER@gcp-sa-cloudbuild.iam.gserviceaccount.com
-CLOUD_BUILD_WORKER_POOL=projects/PROJECT_ID/locations/asia-south1/workerPools/POOL_NAME
-VALIDATION_PYTHON_IMAGE=asia-south1-docker.pkg.dev/PROJECT_ID/nexus/payflow-python-validator:1
-VALIDATION_NODE_IMAGE=asia-south1-docker.pkg.dev/PROJECT_ID/nexus/payflow-node-validator:1
 ```
 
 Set `CORS_ORIGINS` to the Firebase Hosting URL, and set the GitHub App fields through Secret Manager. Set `NEXUS_AI_PERMISSIONS` to the permissions your team intends to allow. Keep model IDs explicit and verify that the chosen models are available in Vertex AI for the project and location.
@@ -175,7 +138,7 @@ Create the job first. Replace `PROJECT_ID` and secret names in the command:
 gcloud run jobs create nexus-execution-worker \
   --image "$WORKER_IMAGE" --region "$REGION" --service-account "$WORKER_SA" \
   --task-timeout 2h --max-retries 0 --tasks 1 --cpu 2 --memory 4Gi \
-  --set-env-vars NEXUS_ENV=production,NEXUS_STORAGE=firestore,GOOGLE_CLOUD_PROJECT="$PROJECT_ID",FIREBASE_PROJECT_ID="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="$REGION",NEXUS_EXECUTION_BACKEND=cloud_run_jobs,NEXUS_CODING_ENABLED=true,NEXUS_VALIDATION_ENABLED=true,CLOUD_BUILD_VALIDATION_LOCATION="$REGION",CLOUD_BUILD_VALIDATION_SERVICE_ACCOUNT="$BUILD_SA",CLOUD_BUILD_SERVICE_AGENT="service-$PROJECT_NUMBER@gcp-sa-cloudbuild.iam.gserviceaccount.com",CLOUD_BUILD_WORKER_POOL="projects/$PROJECT_ID/locations/$REGION/workerPools/POOL_NAME",ATTACHMENTS_BUCKET=YOUR_PRIVATE_BUCKET,WORKSPACE_ROOT=/tmp/nexus-workspaces \
+  --set-env-vars NEXUS_ENV=production,NEXUS_STORAGE=firestore,GOOGLE_CLOUD_PROJECT="$PROJECT_ID",FIREBASE_PROJECT_ID="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="$REGION",NEXUS_EXECUTION_BACKEND=cloud_run_jobs,NEXUS_CODING_ENABLED=true,NEXUS_VALIDATION_ENABLED=true,NEXUS_VALIDATION_TIMEOUT_SECONDS=1200,ATTACHMENTS_BUCKET=YOUR_PRIVATE_BUCKET,WORKSPACE_ROOT=/tmp/nexus-workspaces \
   --set-secrets GITHUB_APP_ID=nexus-github-app-id:latest,GITHUB_APP_SLUG=nexus-github-app-slug:latest,GITHUB_APP_PRIVATE_KEY=nexus-github-app-private-key:latest,GITHUB_APP_STATE_SECRET=nexus-github-app-state-secret:latest
 ```
 
@@ -189,15 +152,15 @@ Example API deploy skeleton (add the model IDs, frontend URL, exact CORS origin,
 gcloud run deploy nexus-api --image "$API_IMAGE" --region "$REGION" \
   --service-account "$API_SA" --allow-unauthenticated --min 0 --max 2 \
   --cpu 1 --memory 1Gi --timeout 300 \
-  --set-env-vars NEXUS_ENV=production,NEXUS_STORAGE=firestore,GOOGLE_CLOUD_PROJECT="$PROJECT_ID",FIREBASE_PROJECT_ID="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="$REGION",NEXUS_EXECUTION_BACKEND=cloud_run_jobs,NEXUS_CODING_ENABLED=true,NEXUS_VALIDATION_ENABLED=true,CLOUD_RUN_EXECUTION_JOB=nexus-execution-worker,CLOUD_RUN_EXECUTION_REGION="$REGION",CLOUD_BUILD_VALIDATION_LOCATION="$REGION",CLOUD_BUILD_VALIDATION_SERVICE_ACCOUNT="$BUILD_SA",CLOUD_BUILD_SERVICE_AGENT="service-$PROJECT_NUMBER@gcp-sa-cloudbuild.iam.gserviceaccount.com",CLOUD_BUILD_WORKER_POOL="projects/$PROJECT_ID/locations/$REGION/workerPools/POOL_NAME",ATTACHMENTS_BUCKET=YOUR_PRIVATE_BUCKET,CORS_ORIGINS=https://YOUR_SITE.web.app,FRONTEND_URL=https://YOUR_SITE.web.app \
+  --set-env-vars NEXUS_ENV=production,NEXUS_STORAGE=firestore,GOOGLE_CLOUD_PROJECT="$PROJECT_ID",FIREBASE_PROJECT_ID="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="$REGION",NEXUS_EXECUTION_BACKEND=cloud_run_jobs,NEXUS_CODING_ENABLED=true,NEXUS_VALIDATION_ENABLED=true,NEXUS_VALIDATION_TIMEOUT_SECONDS=1200,CLOUD_RUN_EXECUTION_JOB=nexus-execution-worker,CLOUD_RUN_EXECUTION_REGION="$REGION",ATTACHMENTS_BUCKET=YOUR_PRIVATE_BUCKET,CORS_ORIGINS=https://YOUR_SITE.web.app,FRONTEND_URL=https://YOUR_SITE.web.app \
   --set-secrets GITHUB_APP_ID=nexus-github-app-id:latest,GITHUB_APP_SLUG=nexus-github-app-slug:latest,GITHUB_APP_PRIVATE_KEY=nexus-github-app-private-key:latest,GITHUB_APP_STATE_SECRET=nexus-github-app-state-secret:latest
 ```
 
-## 7. Configure the hosted UI and verify
+## 6. Configure the hosted UI and verify
 
 In Firebase Hosting build settings, set `VITE_API_BASE_URL` to the deployed Cloud Run API URL. Rebuild and redeploy the frontend after changing Vite environment variables; they are embedded at build time. Do not use `localhost` or an emulator URL in the hosted build.
 
-Connect the GitHub App installation in NEXUS, select an installed repository, analyze a simple task, then run it. The task activity should show the remote workspace, coding stage, Cloud Build validation result, security review, and PR creation/approval state. Cloud Build logs are linked from the validation summary; execution logs are available from the Cloud Run Job execution in Cloud Console. Stopping a task cancels its Cloud Run Job execution and requests cancellation of any active Cloud Build.
+Connect the GitHub App installation in NEXUS, select an installed repository, analyze a simple task, then run it. The task activity should show the remote workspace, coding stage, Antigravity-discovered validation results, security review, and PR creation/approval state. Execution logs are available from the Cloud Run Job execution in Cloud Console. Stopping a task cancels its Cloud Run Job execution and active Antigravity validation.
 
 ## What runs where
 
@@ -205,8 +168,8 @@ Connect the GitHub App installation in NEXUS, select an installed repository, an
 | --- | --- | --- |
 | API and Firebase auth verification | Cloud Run service | Firestore; private GCS attachments |
 | Coding worker | One Cloud Run Job execution per task | Firestore activity; repository credentials from Secret Manager |
-| Isolated validation | Cloud Build private pool | Logs in Cloud Logging; per-build source bucket removed after completion |
+| Validation | Antigravity in the Cloud Run worker sandbox | Validation report and activity events in Firestore |
 | Approved patch awaiting PR | Private GCS object | Deleted after publication only by a future cleanup policy |
 | Models | Vertex AI | No local model server or API key required |
 
-Add a GCS lifecycle rule for `execution-workspaces/` as a safety net after choosing a retention period. This implementation deletes the per-validation source bucket after each build; failed cleanup is logged and should be monitored. Cloud billing and GitHub App installation remain account setup tasks; this guide does not create resources automatically.
+Add a GCS lifecycle rule for `execution-workspaces/` as a safety net after choosing a retention period. Cloud billing and GitHub App installation remain account setup tasks; this guide does not create resources automatically.

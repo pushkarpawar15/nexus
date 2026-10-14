@@ -44,9 +44,7 @@ def test_skipped_validation_does_not_request_operator_input_and_blocks_execution
             started_at=now,
             finished_at=now,
             commands=[],
-            summary=(
-                "Validation skipped: No validation profile is configured for this repository."
-            ),
+            summary=("Validation skipped: No applicable repository checks could be run."),
         )
 
         class SkippedValidator:

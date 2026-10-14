@@ -27,6 +27,7 @@ class ValidationCommandStatus(str, Enum):
 
 class ValidationCommandResult(UtcTimestampModel):
     command_id: Annotated[str, StringConstraints(min_length=1, max_length=100)]
+    command: Annotated[str, StringConstraints(max_length=500)] | None = None
     status: ValidationCommandStatus
     started_at: datetime | None = None
     finished_at: datetime | None = None

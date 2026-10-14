@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import io
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.config import Settings
 from app.integrations import validation_runner
 from app.integrations.validation_runner import (
-    PayFlowValidationRunner,
+    AgentValidationCheck,
+    AgentValidationOutput,
+    AntigravityValidationRunner,
     compute_patch_fingerprint,
-    payflow_commands,
 )
 from app.models.task import Task, TaskStatus
 from app.schemas.execution import ExecutionRecord, ExecutionStatus
@@ -22,9 +21,9 @@ def records() -> tuple[Task, ExecutionRecord]:
     task = Task(
         id="task-1",
         title="A validation task",
-        description="Run configured checks",
-        repository_key="nexus_pay",
-        status=TaskStatus.IN_PROGRESS,
+        description="Run available repository checks",
+        repository_key="github-123",
+        status=TaskStatus.VALIDATING,
         created_at=now,
         updated_at=now,
         created_by="operator-1",
@@ -33,140 +32,135 @@ def records() -> tuple[Task, ExecutionRecord]:
         id="execution-1",
         task_id=task.id,
         assigned_worker="coding-agent",
-        status=ExecutionStatus.QUEUED,
+        status=ExecutionStatus.RUNNING,
         created_at=now,
         updated_at=now,
         repository_key=task.repository_key,
+        patch_fingerprint="0" * 64,
+        changed_files=["src/app.ts"],
     )
     return task, execution
 
 
 def make_workspace(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "backend").mkdir()
-    (root / "frontend").mkdir()
-    (root / "backend" / "main.py").write_text("print('ok')\n", encoding="utf-8")
-    (root / "frontend" / "package.json").write_text("{}\n", encoding="utf-8")
+    (root / "package.json").write_text('{"scripts":{"test":"vitest run"}}\n', encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "app.ts").write_text("export const answer = 42;\n", encoding="utf-8")
     return root
 
 
-def test_payflow_profile_uses_fixed_order_and_arguments() -> None:
-    settings = Settings(_env_file=None, environment="testing", storage="memory")
+def run_with_output(
+    task: Task,
+    execution: ExecutionRecord,
+    workspace: Path,
+    output: AgentValidationOutput,
+    *,
+    tool_results: list[str] | None = None,
+):
+    runner = AntigravityValidationRunner(
+        Settings(_env_file=None, environment="testing", storage="memory")
+    )
 
-    commands = payflow_commands(settings)
+    async def ask(_task, _execution, _workspace):
+        return output, tool_results or []
 
-    assert [command.command_id for command in commands] == [
-        "backend_pytest",
-        "backend_ruff",
-        "backend_format",
-        "frontend_test",
-        "frontend_lint",
-        "frontend_typecheck",
-        "frontend_build",
-    ]
-    assert [command.argv for command in commands[-4:]] == [
-        ("npm", "test", "--", "--run"),
-        ("npm", "run", "lint"),
-        ("npm", "run", "typecheck"),
-        ("npm", "run", "build"),
-    ]
-
-
-def test_patch_fingerprint_ignores_environment_files_and_changes_with_source(
-    tmp_path: Path,
-) -> None:
-    workspace = make_workspace(tmp_path)
-    first = compute_patch_fingerprint(workspace)
-    (workspace / "backend" / ".env.local").write_text("SECRET=ignored", encoding="utf-8")
-    assert compute_patch_fingerprint(workspace) == first
-    (workspace / "backend" / "main.py").write_text("print('changed')\n", encoding="utf-8")
-    assert compute_patch_fingerprint(workspace) != first
+    runner._ask_antigravity = ask
+    fingerprint = compute_patch_fingerprint(workspace)
+    execution.patch_fingerprint = fingerprint
+    return runner.run(task, execution, workspace, expected_fingerprint=fingerprint)
 
 
-def test_missing_image_marks_first_check_unavailable_and_skips_the_rest(
-    tmp_path: Path, monkeypatch
-) -> None:
-    settings = Settings(_env_file=None, environment="testing", storage="memory")
+def test_validation_discovers_repository_checks_without_a_profile(tmp_path: Path) -> None:
     task, execution = records()
     workspace = make_workspace(tmp_path / "workspace")
-    monkeypatch.setattr(
-        validation_runner.subprocess,
-        "run",
-        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "missing"),
+    output = AgentValidationOutput(
+        outcome="PASSED",
+        summary="The repository test suite passed.",
+        checks=[
+            AgentValidationCheck(
+                name="Vitest",
+                command="npm test -- --run",
+                status="PASSED",
+                exit_code=0,
+                summary="All tests passed.",
+                stdout_excerpt="Tests 4 passed",
+            )
+        ],
     )
 
-    report = PayFlowValidationRunner(settings).run(
-        task,
-        execution,
-        workspace,
-        expected_fingerprint=compute_patch_fingerprint(workspace),
-    )
+    report = run_with_output(task, execution, workspace, output, tool_results=["exit code 0"])
 
-    assert report.overall_status == ValidationStatus.BLOCKED
-    assert report.commands[0].status == ValidationCommandStatus.UNAVAILABLE
-    assert all(
-        command.status == ValidationCommandStatus.UNEXECUTED for command in report.commands[1:]
-    )
+    assert report.overall_status == ValidationStatus.PASSED
+    assert report.summary == "The repository test suite passed."
+    assert len(report.commands) == 1
+    assert report.commands[0].command_id == "Vitest"
+    assert report.commands[0].command == "npm test -- --run"
+    assert report.commands[0].status == ValidationCommandStatus.PASSED
+    assert report.commands[0].stdout_excerpt == "Tests 4 passed\nexit code 0"
+    assert report.commands[0].stderr_excerpt == ""
 
 
-def test_missing_profile_skips_every_check_with_consistent_reason(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, environment="testing", storage="memory")
+def test_no_applicable_repository_checks_remains_a_blocking_skip(tmp_path: Path) -> None:
     task, execution = records()
-    task.repository_key = "github-123"
-    execution.repository_key = task.repository_key
     workspace = make_workspace(tmp_path / "workspace")
-
-    report = PayFlowValidationRunner(settings).run(
-        task,
-        execution,
-        workspace,
-        expected_fingerprint=compute_patch_fingerprint(workspace),
+    output = AgentValidationOutput(
+        outcome="NO_CHECKS",
+        summary="No repository test or quality-check commands were found.",
+        checks=[],
     )
 
-    reason = "No validation profile is configured for this repository."
+    report = run_with_output(task, execution, workspace, output)
+
     assert report.overall_status == ValidationStatus.SKIPPED
-    assert report.summary == f"Validation skipped: {reason}"
-    assert [command.status for command in report.commands] == [
-        ValidationCommandStatus.SKIPPED
-    ] * len(payflow_commands(settings))
-    assert {command.error for command in report.commands} == {reason}
+    assert report.summary.startswith("Validation skipped:")
+    assert report.commands[0].status == ValidationCommandStatus.SKIPPED
 
 
-def test_failed_command_stops_the_profile(tmp_path: Path, monkeypatch) -> None:
-    class FailedContainer:
-        stdout = io.BytesIO(b"test output")
-        stderr = io.BytesIO(b"failure details")
-
-        def poll(self):
-            return 1
-
-        def wait(self, timeout=None):
-            return 1
-
-    settings = Settings(_env_file=None, environment="testing", storage="memory")
+def test_failed_check_cannot_be_marked_passed_with_nonzero_exit_code(tmp_path: Path) -> None:
     task, execution = records()
     workspace = make_workspace(tmp_path / "workspace")
-    monkeypatch.setattr(
-        validation_runner.subprocess,
-        "run",
-        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""),
-    )
-    monkeypatch.setattr(
-        validation_runner.subprocess,
-        "Popen",
-        lambda *args, **kwargs: FailedContainer(),
+    output = AgentValidationOutput(
+        outcome="PASSED",
+        summary="Validation finished.",
+        checks=[
+            AgentValidationCheck(
+                name="Vitest",
+                command="npm test",
+                status="PASSED",
+                exit_code=1,
+                summary="One test failed.",
+            )
+        ],
     )
 
-    report = PayFlowValidationRunner(settings).run(
-        task,
-        execution,
-        workspace,
-        expected_fingerprint=compute_patch_fingerprint(workspace),
-    )
+    report = run_with_output(task, execution, workspace, output)
 
     assert report.overall_status == ValidationStatus.FAILED
     assert report.commands[0].status == ValidationCommandStatus.FAILED
-    assert report.commands[0].stdout_excerpt == "test output"
-    assert all(
-        command.status == ValidationCommandStatus.UNEXECUTED for command in report.commands[1:]
+    assert report.commands[0].error == "Vitest: One test failed."
+
+
+def test_validation_preserves_the_original_workspace_fingerprint(tmp_path: Path) -> None:
+    task, execution = records()
+    workspace = make_workspace(tmp_path / "workspace")
+    before = compute_patch_fingerprint(workspace)
+    output = AgentValidationOutput(
+        outcome="PASSED",
+        summary="Repository checks passed.",
+        checks=[
+            AgentValidationCheck(
+                name="pytest",
+                command="pytest",
+                status="PASSED",
+                exit_code=0,
+                summary="All tests passed.",
+            )
+        ],
     )
+
+    report = run_with_output(task, execution, workspace, output)
+
+    assert report.overall_status == ValidationStatus.PASSED
+    assert compute_patch_fingerprint(workspace) == before
+    assert validation_runner.MAX_TOTAL_SOURCE_BYTES == 30 * 1024 * 1024

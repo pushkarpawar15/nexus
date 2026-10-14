@@ -84,7 +84,7 @@ def test_analysis_route_persists_policy_enforced_plan_and_activity() -> None:
                 approval_required=False,
                 reason="A bounded bug fix.",
                 steps=["Inspect the parser.", "Add a regression check."],
-                validation_plan=["Run the fixed validation profile."],
+                validation_plan=["Run the repository's existing validation checks."],
             )
 
     app.state.analysis_service.analyzer = FakeAnalyzer()
@@ -220,9 +220,7 @@ def test_local_pipeline_persists_observed_stage_results_and_keeps_target_clean(t
             created_by="operator",
             updated_by="operator",
         )
-        disabled_skill = global_skill.model_copy(
-            update={"id": "disabled-style", "enabled": False}
-        )
+        disabled_skill = global_skill.model_copy(update={"id": "disabled-style", "enabled": False})
         unrelated_skill = repository_skill.model_copy(
             update={"id": "other-style", "repository_key": "another-repo"}
         )

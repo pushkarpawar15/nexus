@@ -101,26 +101,16 @@ def test_repository_connections_are_user_scoped_and_tasks_return_after_reconnect
     assert client.get("/api/tasks", headers=_headers("user-a")).json()["total"] == 1
 
 
-def test_connected_repository_validation_profile_is_configurable_and_persistent() -> None:
+def test_connected_repository_listing_has_no_validation_profile_setting() -> None:
     client = _client()
     connected = _connect(client, "user-a")
     repository_key = connected["repository_info"]["key"]
 
-    configured = client.patch(
-        f"/api/repositories/{repository_key}/validation-profile",
-        headers=_headers("user-a"),
-        json={"profile": "nexus_monorepo"},
-    )
-
-    assert configured.status_code == 200
-    assert configured.json()["validation_profile"] == "nexus_monorepo"
     listed = client.get("/api/repositories", headers=_headers("user-a"))
-    assert listed.json()["items"][0]["validation_profile"] == "nexus_monorepo"
-
-    cleared = client.patch(
+    assert "validation_profile" not in listed.json()["items"][0]
+    removed_endpoint = client.patch(
         f"/api/repositories/{repository_key}/validation-profile",
         headers=_headers("user-a"),
         json={"profile": None},
     )
-    assert cleared.status_code == 200
-    assert cleared.json()["validation_profile"] is None
+    assert removed_endpoint.status_code == 404

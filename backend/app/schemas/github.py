@@ -1,6 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from app.core.config import ValidationProfile
 from app.schemas.base import StrictModel
 
 
@@ -14,7 +13,3 @@ class GitHubPATConnectRequest(BaseModel):
 
 class GitHubRepositoryRemovalRequest(StrictModel):
     confirm_pending_tasks: bool = False
-
-
-class RepositoryValidationProfileRequest(StrictModel):
-    profile: ValidationProfile | None

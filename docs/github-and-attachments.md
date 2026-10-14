@@ -82,21 +82,22 @@ When GCP billing is unavailable, get a Gemini API key from Google AI Studio and 
 GEMINI_API_KEY=your-backend-only-key
 ```
 
-For local coding, install Docker, build the validator images from the target PayFlow checkout, and use a private workspace outside the NEXUS and target checkouts. The local environment can then enable the worker with:
+For local coding, install the Antigravity SDK and the runtimes needed by the repositories you connect. Use a private workspace outside the NEXUS checkout. Validation is delegated to Antigravity, which discovers the repository's existing checks and runs them in a sandboxed copy of the workspace:
 
 ```dotenv
 WORKSPACE_ROOT=/tmp/nexus-workspaces
 NEXUS_CODING_ENABLED=true
 NEXUS_VALIDATION_ENABLED=true
+NEXUS_VALIDATION_TIMEOUT_SECONDS=1200
 NEXUS_AI_PERMISSIONS=ai_execute,ai_validate,security_review
 ```
 
-Restart the backend after changing these settings. The built-in validation profile covers the PayFlow monorepo (`backend/` and `frontend/`); a PAT-connected repository named `payflow` is matched to this profile when both directories exist. Other repository layouts need an explicitly selected supported profile or their checks will be skipped. The example environment deliberately leaves the worker flags and AI permissions off.
+Restart the backend after changing these settings. No per-repository validation profile or prebuilt language-specific image is needed. The worker must report an available Antigravity command sandbox; if it does not, validation blocks rather than running repository code without isolation. The example environment deliberately leaves the worker flags and AI permissions off.
 
-When an execution is requested, the isolated worker creates a branch, asks the coding model for bounded file operations, runs the configured Docker validation checks, and performs security review. A validated task opens a PR automatically when human approval is not required. If approval is required, approving the patch opens the PR; transient publication failures keep a retry action on the task page.
+When an execution is requested, the isolated worker creates a branch, asks the coding model for bounded file operations, asks Antigravity to discover and run the repository's existing checks, and performs security review. A validated task opens a PR automatically when human approval is not required. If approval is required, approving the patch opens the PR; transient publication failures keep a retry action on the task page.
 
-The current built-in validation profile is still the NEXUS PayFlow monorepo profile. A GitHub connection by itself does not make an arbitrary repository safe to execute or validate, and a skipped profile never satisfies validation or publication gates.
+A repository with no applicable runnable checks is reported as skipped and does not satisfy validation or publication gates. Antigravity cannot install dependencies or change the validation workspace; required tools and project dependencies must already be available in the worker environment.
 
 ## 6. Hosted boundary
 
-Cloud Run currently hosts the API only. It does not yet have a durable isolated coding worker, so production configuration rejects coding and validation. Deploying the connection UI and task attachments does not mean hosted code execution or automatic PR publication is available.
+Hosted execution uses a Cloud Run Job per task. The API, worker, repository credentials, and sandboxed Antigravity validation must all be configured before enabling coding and validation. Deploying the connection UI and task attachments alone does not enable hosted code execution or automatic PR publication.

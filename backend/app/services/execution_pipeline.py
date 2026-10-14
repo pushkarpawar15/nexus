@@ -44,6 +44,7 @@ def _validation_evidence(report) -> list[dict[str, object]]:
     return [
         {
             "command_id": command.command_id,
+            "command": command.command or "",
             "status": command.status.value,
             "exit_code": command.exit_code,
             "error": redact_credentials(command.error or "")[:1000],
@@ -64,6 +65,7 @@ def _validation_feedback(report) -> str:
                 for part in (
                     f"Command {command.command_id}: {command.status.value} "
                     f"(exit code {command.exit_code}).",
+                    f"Ran: {command.command}" if command.command else "",
                     f"Error: {command.error}" if command.error else "",
                     f"stderr:\n{command.stderr_excerpt}" if command.stderr_excerpt else "",
                     f"stdout:\n{command.stdout_excerpt}" if command.stdout_excerpt else "",
@@ -375,7 +377,7 @@ class ExecutionPipeline:
                 task,
                 TaskStatus.VALIDATING,
                 actor="coder",
-                reason="A verified patch is ready for fixed validation.",
+                reason="A verified patch is ready for repository validation.",
                 evidence=TransitionEvidence(
                     kind=TransitionEvidenceKind.EXECUTION, reference=execution.id
                 ),
@@ -874,7 +876,7 @@ class ExecutionPipeline:
                 task.id,
                 execution.id,
                 "validation.started",
-                f"Running configured validation commands (round {repair_round + 1}).",
+                f"Running Antigravity-discovered repository checks (round {repair_round + 1}).",
                 {"round": repair_round + 1},
             )
             validator = self._execution_validators.get(execution.id, self.validator)

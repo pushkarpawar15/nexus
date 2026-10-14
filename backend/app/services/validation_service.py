@@ -5,7 +5,10 @@ from pathlib import Path
 
 from app.core.config import Settings
 from app.core.errors import ErrorCode, NexusError
-from app.integrations.validation_runner import PayFlowValidationRunner, compute_patch_fingerprint
+from app.integrations.validation_runner import (
+    AntigravityValidationRunner,
+    compute_patch_fingerprint,
+)
 from app.models.task import Task, TaskStatus
 from app.repositories.records import WorkflowRepositories
 from app.schemas.execution import ExecutionRecord, ExecutionStatus
@@ -17,7 +20,7 @@ class ValidationService:
         self, settings: Settings, tasks, records: WorkflowRepositories, runner=None
     ) -> None:
         self.settings, self.tasks, self.records = settings, tasks, records
-        self.runner = runner or PayFlowValidationRunner(settings)
+        self.runner = runner or AntigravityValidationRunner(settings)
 
     async def cancel_execution(self, execution_id: str) -> None:
         cancel = getattr(self.runner, "cancel_execution", None)

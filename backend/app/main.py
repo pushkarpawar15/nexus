@@ -63,7 +63,6 @@ from app.schemas.execution import ActivityEvent, ActivitySource, ExecutionModelR
 from app.schemas.github import (
     GitHubPATConnectRequest,
     GitHubRepositoryRemovalRequest,
-    RepositoryValidationProfileRequest,
 )
 from app.schemas.skills import SkillRecord, SkillWriteRequest
 from app.schemas.tasks import (
@@ -225,10 +224,7 @@ def create_app(
 
     @app.middleware("http")
     async def refresh_github_repository_allowlist(request: Request, call_next):
-        if (
-            runtime_settings.github_app_slug
-            and request.url.path.startswith("/api/")
-        ):
+        if runtime_settings.github_app_slug and request.url.path.startswith("/api/"):
             try:
                 connection = await github_app.status()
                 if connection["connected"]:
@@ -351,9 +347,6 @@ def create_app(
             "private": bool(target.github_private),
             "mode": "pat",
             "account_login": connection.account_login,
-            "validation_profile": (
-                target.validation_profile.value if target.validation_profile else None
-            ),
         }
 
     async def pending_task_count(repository_key: str) -> int:
@@ -386,9 +379,7 @@ def create_app(
     async def _validate_skill_repository(
         scope: str, repository_key: str | None, user: UserIdentity
     ) -> None:
-        if scope == "repository" and (
-            repository_key not in await repository_keys_for_user(user)
-        ):
+        if scope == "repository" and (repository_key not in await repository_keys_for_user(user)):
             raise NexusError(
                 ErrorCode.REPOSITORY_NOT_ALLOWED,
                 "The requested repository is not approved.",
@@ -433,35 +424,12 @@ def create_app(
                 "base_branch": target.base_branch,
                 "private": bool(target.github_private),
                 "mode": "app",
-                "validation_profile": (
-                    target.validation_profile.value if target.validation_profile else None
-                ),
             }
             for key, target in runtime_settings.approved_repositories.items()
         }
         for connected in await github_connections.list_for_user(user.uid):
             items[connected.repository_key] = repository_connection_payload(connected)
         return {"items": [items[key] for key in sorted(items)]}
-
-    @app.patch("/api/repositories/{repository_key}/validation-profile")
-    async def set_repository_validation_profile(
-        repository_key: str,
-        request: RepositoryValidationProfileRequest,
-        user: UserIdentity = Depends(require_operator),
-    ) -> dict[str, Any]:
-        connection = await github_connections.get(user.uid, repository_key)
-        if connection is None:
-            raise NexusError(
-                ErrorCode.REPOSITORY_NOT_ALLOWED,
-                "Only a repository connected with a personal access token can be configured here.",
-                status_code=404,
-            )
-        target = connection.target.model_copy(update={"validation_profile": request.profile})
-        updated = connection.model_copy(update={"target": target})
-        await github_connections.put(updated)
-        runtime_settings.approved_repositories[repository_key] = target
-        await refresh_internal_repository_allowlist()
-        return repository_connection_payload(updated)
 
     @app.get("/api/repositories/{repository_key}/removal-impact")
     async def repository_removal_impact(
@@ -855,9 +823,7 @@ def create_app(
             title=request.title,
             description=request.description,
             repository_key=request.repository_key,
-            repository_label=(
-                target.label or f"{target.owner}/{target.repo}"
-            ),
+            repository_label=(target.label or f"{target.owner}/{target.repo}"),
             task_type=request.task_type,
             status=TaskStatus.BACKLOG,
             created_at=now,
@@ -899,9 +865,8 @@ def create_app(
                 "Only untouched BACKLOG tasks can be edited.",
                 status_code=409,
             )
-        if (
-            request.repository_key
-            and request.repository_key not in await repository_keys_for_user(user)
+        if request.repository_key and request.repository_key not in await repository_keys_for_user(
+            user
         ):
             raise NexusError(
                 ErrorCode.REPOSITORY_NOT_ALLOWED, "Repository is not approved.", status_code=422
@@ -1076,9 +1041,7 @@ def create_app(
         return await app.state.execution_service.stop(task, execution_id, user.uid)
 
     @app.get("/api/tasks/{task_id}/executions")
-    async def list_task_executions(
-        task_id: str, user: UserIdentity = Depends(require_viewer)
-    ):
+    async def list_task_executions(task_id: str, user: UserIdentity = Depends(require_viewer)):
         await get_task_or_404(task_id, user)
         records = await workflow_repositories.executions.list_for_task(task_id)
         return sorted(records, key=lambda item: (item.created_at, item.id))
@@ -1100,9 +1063,7 @@ def create_app(
         return sorted(events, key=lambda event: (event.occurred_at, event.id))
 
     @app.get("/api/executions/{execution_id}/activity")
-    async def execution_activity(
-        execution_id: str, user: UserIdentity = Depends(require_viewer)
-    ):
+    async def execution_activity(execution_id: str, user: UserIdentity = Depends(require_viewer)):
         record = await workflow_repositories.executions.get(execution_id)
         if record is None:
             raise NexusError(

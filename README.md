@@ -21,7 +21,7 @@ test -e frontend/.env.local || cp frontend/.env.example frontend/.env.local
 
 The examples use `demo-nexus` consistently for the backend and frontend Firebase project IDs. They select Firestore, configure the local emulators, start with no configured target repositories, and leave `NEXUS_CODING_ENABLED` and `NEXUS_VALIDATION_ENABLED` set to `false`. Do not put GitHub or Gemini credentials in frontend variables.
 
-For a hosted setup that runs task coding and validation entirely on GCP, follow [the Cloud Run and Vertex AI deployment guide](docs/cloud-execution.md). It configures a Cloud Run Job worker, Cloud Build validation, Artifact Registry, service identities, and GitHub credentials stored in Secret Manager.
+For a hosted setup that runs task coding and validation entirely on GCP, follow [the Cloud Run and Vertex AI deployment guide](docs/cloud-execution.md). It configures a Cloud Run Job worker, Antigravity-discovered repository checks, Artifact Registry, service identities, and GitHub credentials stored in Secret Manager.
 
 Start the emulators:
 
@@ -49,7 +49,7 @@ npm run dev
 
 Open `http://localhost:5173`. Vite proxies `/api`, `/health`, and `/ready` to `127.0.0.1:8000`. `GET /health` checks process liveness; `GET /api/ready` checks the configured store and returns 503 if Firestore is unavailable. API task and repository reads require a Firebase ID token.
 
-The app includes task and workflow views, GitHub App repository connection, attachment upload/download/removal, Gemini analysis and structured coding proposals, isolated validation, approval, and PR publication. Files are stored privately and passed to Vertex AI as multimodal input. See [GitHub and task attachments setup](docs/github-and-attachments.md) before enabling the local worker. The example configuration intentionally keeps coding and validation disabled until a local workspace and validator images are configured.
+The app includes task and workflow views, GitHub App repository connection, attachment upload/download/removal, Gemini analysis and structured coding proposals, isolated Antigravity validation, approval, and PR publication. Files are stored privately and passed to Vertex AI as multimodal input. See [GitHub and task attachments setup](docs/github-and-attachments.md) before enabling the local worker. The example configuration intentionally keeps coding and validation disabled until a private workspace, Antigravity sandbox, and required repository runtimes are available.
 
 ## Configuration boundaries
 
@@ -86,4 +86,4 @@ The backend test suite covers policy enforcement, authenticated API behavior, an
 
 ## Hosted boundary
 
-`backend/Dockerfile` and Firebase Hosting configuration describe the deployment shape. Hosted coding and validation are supported through the Cloud Run Job worker and Cloud Build; follow the [deployment guide](docs/cloud-execution.md) before enabling both execution flags in production. Local execution uses an in-process worker and requires a configured workspace and validator images. Production attachments require a private GCS bucket. A task must not be reported as completed until its isolated worker and required validation gates have finished.
+`backend/Dockerfile` and Firebase Hosting configuration describe the deployment shape. Hosted coding and validation use the Cloud Run Job worker and Antigravity's sandboxed command tool; follow the [deployment guide](docs/cloud-execution.md) before enabling both execution flags in production. Local execution uses an in-process worker and requires a configured private workspace and available Antigravity sandbox. Production attachments require a private GCS bucket. A task must not be reported as completed until its isolated worker and required validation gates have finished.

@@ -66,13 +66,13 @@ The workflow activity and typed task/execution records remain the user-facing ev
 
 ## Local and hosted boundaries
 
-Local examples select the Auth and Firestore emulators and leave coding/validation disabled. Local coding requires a private workspace root, validator images and explicit policy permissions. A Gemini API key can be used locally while GCP billing is unavailable.
+Local examples select the Auth and Firestore emulators and leave coding/validation disabled. Local coding requires a private workspace root, an available Antigravity command sandbox, project runtimes, and explicit policy permissions. A Gemini API key can be used locally while GCP billing is unavailable.
 
 The Cloud Run image supports the API and Firestore readiness check. This version does not include a durable queue, isolated hosted worker or durable workspace handoff. Production configuration rejects memory storage, emulator hosts and enabled coding/validation flags. Production task attachments require a private GCS bucket. A deployment must not be represented as having run coding, validation, security review or PR creation.
 
 ## Delivery limits
 
 - Gemini and GitHub integrations need valid project credentials and were not exercised against real external services during local verification.
-- Coding and validation are disabled in the sample environment. Enabling them requires a separate PayFlow checkout, Docker validator images, Vertex AI ADC, and a private workspace directory.
+- Coding and validation are disabled in the sample environment. Enabling them requires Vertex AI ADC, an Antigravity command sandbox, project runtimes, and a private workspace directory.
 - The dispatcher is an in-process local worker. Hosted Cloud Run execution remains disabled until a durable queue and isolated worker handoff are provided.
 - Firebase Hosting and Firestore rules are configured, but no cloud resources have been provisioned or deployed by this reconstruction.

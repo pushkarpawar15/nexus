@@ -27,7 +27,6 @@ export type TaskType =
 export type Risk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type Complexity = 'LOW' | 'MEDIUM' | 'HIGH';
 export type Mode = 'AI' | 'HUMAN' | 'HYBRID';
-export type ValidationProfile = 'nexus_monorepo';
 export interface ExecutionPlanInput {
   title?: string;
   risk: Risk;
@@ -174,6 +173,7 @@ export interface ValidationReport {
   summary: string;
   commands: Array<{
     command_id: string;
+    command: string | null;
     status: string;
     exit_code: number | null;
     duration_ms: number | null;

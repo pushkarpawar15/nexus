@@ -8,7 +8,7 @@ class AgentRegistry:
         self._capabilities = {
             "planner": frozenset({"plan"}),
             "coder": frozenset({"edit_files"}),
-            "validator": frozenset({"run_fixed_checks"}),
+            "validator": frozenset({"discover_and_run_checks"}),
             "security_reviewer": frozenset({"review_patch"}),
         }
 

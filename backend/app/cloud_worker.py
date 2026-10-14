@@ -8,17 +8,14 @@ import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.core.config import RepositoryTarget, Settings, get_settings
+from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.integrations.attachments import AttachmentStorage
-from app.integrations.cloud_build_validation import CloudBuildValidationRunner
 from app.integrations.github_app import GitHubAppIntegration
 from app.integrations.github_secrets import GoogleSecretManagerGitHubSecretStore
+from app.integrations.validation_runner import AntigravityValidationRunner
 from app.integrations.workspace_artifact import upload_workspace
-from app.repositories.github_connections import (
-    FirestoreGitHubConnectionRepository,
-    GitHubRepositoryConnection,
-)
+from app.repositories.github_connections import FirestoreGitHubConnectionRepository
 from app.repositories.records import create_firestore_workflow_repositories
 from app.repositories.skills import FirestoreSkillRepository
 from app.repositories.tasks import FirestoreTaskRepository
@@ -28,21 +25,6 @@ from app.services.execution_pipeline import ExecutionPipeline
 from app.services.github_pr_service import GitHubPRService
 from app.services.langgraph_workflow import AsyncFirestoreCheckpointer
 from app.services.validation_service import ValidationService
-
-
-def _apply_connection_validation_profile(
-    settings: Settings,
-    repository_key: str,
-    connection: GitHubRepositoryConnection,
-) -> Settings:
-    target = settings.approved_repositories.get(repository_key)
-    if target is None:
-        return settings
-    targets: dict[str, RepositoryTarget] = dict(settings.approved_repositories)
-    targets[repository_key] = target.model_copy(
-        update={"validation_profile": connection.target.validation_profile}
-    )
-    return settings.model_copy(update={"approved_repositories": targets})
 
 
 async def run_worker() -> None:
@@ -91,11 +73,9 @@ async def run_worker() -> None:
             token = await GoogleSecretManagerGitHubSecretStore(settings).get(
                 task_connection.secret_name
             )
-            task_settings = _apply_connection_validation_profile(
-                task_settings, task.repository_key, task_connection
-            ).model_copy(update={"github_token": token})
+            task_settings = task_settings.model_copy(update={"github_token": token})
         settings = task_settings
-        validation_runner = CloudBuildValidationRunner(settings)
+        validation_runner = AntigravityValidationRunner(settings)
         settings.workspace_root = settings.workspace_root or Path("/tmp/nexus-workspaces")
         settings.workspace_root.mkdir(parents=True, exist_ok=True, mode=0o700)
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -23,10 +22,6 @@ class ConfigurationError(RuntimeError):
     """Raised when NEXUS cannot start with the supplied settings."""
 
 
-class ValidationProfile(str, Enum):
-    NEXUS_MONOREPO = "nexus_monorepo"
-
-
 class RepositoryTarget(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -38,7 +33,8 @@ class RepositoryTarget(BaseModel):
     github_repository_id: int | None = Field(default=None, ge=1)
     github_installation_id: int | None = Field(default=None, ge=1)
     github_private: bool | None = None
-    validation_profile: ValidationProfile | None = None
+    # Accept legacy Firestore documents, but never expose or use this profile.
+    validation_profile: str | None = Field(default=None, exclude=True)
 
     @field_validator("owner", "repo")
     @classmethod
@@ -179,34 +175,6 @@ class Settings(BaseSettings):
             "CLOUD_RUN_EXECUTION_TIMEOUT_SECONDS", "cloud_run_execution_timeout_seconds"
         ),
     )
-    cloud_build_service_account: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "CLOUD_BUILD_VALIDATION_SERVICE_ACCOUNT", "cloud_build_service_account"
-        ),
-    )
-    cloud_build_service_agent: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("CLOUD_BUILD_SERVICE_AGENT", "cloud_build_service_agent"),
-    )
-    cloud_build_worker_pool: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("CLOUD_BUILD_WORKER_POOL", "cloud_build_worker_pool"),
-    )
-    cloud_build_validation_location: str = Field(
-        default="asia-south1",
-        validation_alias=AliasChoices(
-            "CLOUD_BUILD_VALIDATION_LOCATION", "cloud_build_validation_location"
-        ),
-    )
-    cloud_build_timeout_seconds: int = Field(
-        default=1200,
-        ge=60,
-        le=3600,
-        validation_alias=AliasChoices(
-            "CLOUD_BUILD_VALIDATION_TIMEOUT_SECONDS", "cloud_build_timeout_seconds"
-        ),
-    )
     workspace_root: Path | None = Field(
         default=None, validation_alias=AliasChoices("WORKSPACE_ROOT", "workspace_root")
     )
@@ -217,24 +185,20 @@ class Settings(BaseSettings):
     attachments_bucket: str | None = Field(
         default=None, validation_alias=AliasChoices("ATTACHMENTS_BUCKET", "attachments_bucket")
     )
-    pay_repository_key: str = Field(
-        default="nexus_pay",
-        validation_alias=AliasChoices("NEXUS_PAY_REPOSITORY_KEY", "pay_repository_key"),
-    )
-    validation_python_image: str = Field(
-        default="nexus-payflow-python-validator:local",
-        validation_alias=AliasChoices("VALIDATION_PYTHON_IMAGE", "validation_python_image"),
-    )
-    validation_node_image: str = Field(
-        default="nexus-payflow-node-validator:local",
-        validation_alias=AliasChoices("VALIDATION_NODE_IMAGE", "validation_node_image"),
-    )
     coding_model_timeout_seconds: int = Field(
         default=180,
         ge=5,
         le=180,
         validation_alias=AliasChoices(
             "CODING_MODEL_TIMEOUT_SECONDS", "coding_model_timeout_seconds"
+        ),
+    )
+    validation_agent_timeout_seconds: int = Field(
+        default=1200,
+        ge=60,
+        le=3600,
+        validation_alias=AliasChoices(
+            "NEXUS_VALIDATION_TIMEOUT_SECONDS", "validation_agent_timeout_seconds"
         ),
     )
     github_target_owner: str | None = Field(
@@ -393,18 +357,6 @@ def validate_settings(settings: Settings) -> None:
         if settings.coding_enabled and settings.execution_backend == "cloud_run_jobs":
             if not settings.cloud_run_job_name or not settings.cloud_run_region:
                 raise ConfigurationError("Cloud Run execution job and region are required.")
-            if not settings.cloud_build_service_account:
-                raise ConfigurationError(
-                    "CLOUD_BUILD_VALIDATION_SERVICE_ACCOUNT is required for cloud validation."
-                )
-            if not settings.cloud_build_service_agent:
-                raise ConfigurationError(
-                    "CLOUD_BUILD_SERVICE_AGENT is required to grant temporary source access."
-                )
-            if not settings.cloud_build_worker_pool:
-                raise ConfigurationError(
-                    "CLOUD_BUILD_WORKER_POOL is required for isolated cloud validation."
-                )
             if not settings.github_app_slug and not (
                 settings.github_token and settings.approved_repositories
             ):
