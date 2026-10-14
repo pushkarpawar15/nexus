@@ -429,11 +429,17 @@ def test_locked_npm_dependencies_use_registry_and_ignore_project_npmrc(
     assert results[0].status == ValidationCommandStatus.PASSED
     assert "--ignore-scripts" in results[0].command
     assert "--registry=https://registry.npmjs.org" in results[0].command
+    assert "--userconfig=/dev/null" not in results[0].command
+    assert "--globalconfig=/dev/null" not in results[0].command
     assert captured["npmrc_hidden_during_install"] is True
     assert npmrc.read_text(encoding="utf-8") == "registry=https://untrusted.example\n"
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert "GITHUB_TOKEN" not in kwargs["env"]
+    assert (
+        kwargs["env"]["npm_config_userconfig"]
+        != kwargs["env"]["npm_config_globalconfig"]
+    )
 
 
 def test_npm_lockfile_rejects_package_urls_outside_public_registry(tmp_path: Path) -> None:

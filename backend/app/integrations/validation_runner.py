@@ -284,8 +284,8 @@ async def _install_npm_project(
         "--no-fund",
         f"--registry={NPM_REGISTRY}",
         f"--cache={cache_directory}",
-        "--userconfig=/dev/null",
-        "--globalconfig=/dev/null",
+        f"--userconfig={cache_directory / 'user.npmrc'}",
+        f"--globalconfig={cache_directory / 'global.npmrc'}",
     ]
     displayed_command = shlex.join(command)
     started_at = datetime.now(timezone.utc)
@@ -310,8 +310,8 @@ async def _install_npm_project(
             "HOME": str(cache_directory),
             "CI": "true",
             "npm_config_cache": str(cache_directory),
-            "npm_config_userconfig": "/dev/null",
-            "npm_config_globalconfig": "/dev/null",
+            "npm_config_userconfig": str(cache_directory / "user.npmrc"),
+            "npm_config_globalconfig": str(cache_directory / "global.npmrc"),
             "npm_config_audit": "false",
             "npm_config_fund": "false",
             "npm_config_ignore_scripts": "true",
