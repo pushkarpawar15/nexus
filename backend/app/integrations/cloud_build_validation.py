@@ -100,23 +100,30 @@ class CloudBuildValidationRunner:
                 and (workspace / "backend").is_dir()
                 and (workspace / "frontend").is_dir()
             )
-            if task.repository_key != self.settings.pay_repository_key and not is_payflow:
+            profile_configured = (
+                bool(target and target.validation_profile is not None)
+                or task.repository_key == self.settings.pay_repository_key
+                or is_payflow
+            )
+            if not profile_configured:
                 results = [
                     self._result(
                         command.command_id,
-                        ValidationCommandStatus.UNEXECUTED,
+                        ValidationCommandStatus.SKIPPED,
                         "No validation profile is configured for this repository.",
                     )
                     for command in commands
                 ]
-                summary = "Validation is not configured for this repository."
+                summary = (
+                    "Validation skipped: No validation profile is configured for this repository."
+                )
                 return self._report(
                     task,
                     execution,
                     expected_fingerprint,
                     started,
                     results,
-                    ValidationStatus.BLOCKED,
+                    ValidationStatus.SKIPPED,
                     summary,
                 )
 

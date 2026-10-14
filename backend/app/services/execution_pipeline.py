@@ -387,6 +387,8 @@ class ExecutionPipeline:
             if validated is None:
                 return
             updated_execution, validation, repair_round = validated
+            if await self._finish_skipped_validation(task, updated_execution, validation):
+                return
             security_required = bool(
                 task.execution_plan and task.execution_plan.security_review_required
             )
@@ -590,6 +592,8 @@ class ExecutionPipeline:
                 if validated is None:
                     return
                 updated_execution, validation, repair_round = validated
+                if await self._finish_skipped_validation(task, updated_execution, validation):
+                    return
             current = await self.tasks.get(task.id)
             if current is None:
                 raise ValueError("Task disappeared during execution.")
@@ -885,6 +889,8 @@ class ExecutionPipeline:
             )
             if validation.overall_status == ValidationStatus.PASSED:
                 return execution, validation, repair_round
+            if validation.overall_status == ValidationStatus.SKIPPED:
+                return execution, validation, repair_round
 
             can_repair = (
                 validation.overall_status == ValidationStatus.FAILED
@@ -1006,6 +1012,35 @@ class ExecutionPipeline:
                     "commit_created": False,
                 },
             )
+
+    async def _finish_skipped_validation(self, task, execution, validation) -> bool:
+        if validation.overall_status != ValidationStatus.SKIPPED:
+            return False
+        reason = validation.summary
+        await self._event(
+            task.id,
+            execution.id,
+            "validation.configuration_required",
+            reason,
+            {"commands": _validation_evidence(validation)},
+        )
+        current = await self.tasks.get(task.id)
+        if current and current.status == TaskStatus.VALIDATING:
+            await WorkflowService(self.tasks).transition(
+                current,
+                TaskStatus.BLOCKED,
+                actor="validator",
+                reason=reason,
+                evidence=TransitionEvidence(
+                    kind=TransitionEvidenceKind.VALIDATION,
+                    reference=validation.id,
+                ),
+                trusted=True,
+            )
+        await self._finish_execution(
+            execution, ExecutionStatus.BLOCKED, reason, "VALIDATION_SKIPPED"
+        )
+        return True
 
     async def stop_active_processes(self, execution_id: str) -> None:
         workspace_stop = self._workspace_stop_events.get(execution_id)

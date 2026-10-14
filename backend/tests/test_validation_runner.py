@@ -109,6 +109,29 @@ def test_missing_image_marks_first_check_unavailable_and_skips_the_rest(
     )
 
 
+def test_missing_profile_skips_every_check_with_consistent_reason(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, environment="testing", storage="memory")
+    task, execution = records()
+    task.repository_key = "github-123"
+    execution.repository_key = task.repository_key
+    workspace = make_workspace(tmp_path / "workspace")
+
+    report = PayFlowValidationRunner(settings).run(
+        task,
+        execution,
+        workspace,
+        expected_fingerprint=compute_patch_fingerprint(workspace),
+    )
+
+    reason = "No validation profile is configured for this repository."
+    assert report.overall_status == ValidationStatus.SKIPPED
+    assert report.summary == f"Validation skipped: {reason}"
+    assert [command.status for command in report.commands] == [
+        ValidationCommandStatus.SKIPPED
+    ] * len(payflow_commands(settings))
+    assert {command.error for command in report.commands} == {reason}
+
+
 def test_failed_command_stops_the_profile(tmp_path: Path, monkeypatch) -> None:
     class FailedContainer:
         stdout = io.BytesIO(b"test output")

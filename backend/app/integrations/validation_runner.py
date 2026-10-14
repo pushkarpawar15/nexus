@@ -404,17 +404,23 @@ class PayFlowValidationRunner:
         overall_status = ValidationStatus.BLOCKED
 
         target = self.settings.approved_repositories.get(task.repository_key)
-        payflow_target = bool(
-            target
-            and target.repo.casefold() == "payflow"
-            and (workspace / "backend").is_dir()
-            and (workspace / "frontend").is_dir()
+        profile_configured = (
+            bool(target and target.validation_profile is not None)
+            or task.repository_key == self.settings.pay_repository_key
+            or bool(
+                target
+                and target.repo.casefold() == "payflow"
+                and (workspace / "backend").is_dir()
+                and (workspace / "frontend").is_dir()
+            )
         )
-        if task.repository_key != self.settings.pay_repository_key and not payflow_target:
+        if not profile_configured:
+            summary = "Validation skipped: No validation profile is configured for this repository."
+            overall_status = ValidationStatus.SKIPPED
             results = [
                 self._result(
                     command,
-                    ValidationCommandStatus.UNEXECUTED,
+                    ValidationCommandStatus.SKIPPED,
                     error="No validation profile is configured for this repository.",
                 )
                 for command in commands

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -22,6 +23,10 @@ class ConfigurationError(RuntimeError):
     """Raised when NEXUS cannot start with the supplied settings."""
 
 
+class ValidationProfile(str, Enum):
+    NEXUS_MONOREPO = "nexus_monorepo"
+
+
 class RepositoryTarget(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -33,6 +38,7 @@ class RepositoryTarget(BaseModel):
     github_repository_id: int | None = Field(default=None, ge=1)
     github_installation_id: int | None = Field(default=None, ge=1)
     github_private: bool | None = None
+    validation_profile: ValidationProfile | None = None
 
     @field_validator("owner", "repo")
     @classmethod

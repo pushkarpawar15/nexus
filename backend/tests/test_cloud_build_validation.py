@@ -1,6 +1,8 @@
 import base64
 import io
 import tarfile
+from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -10,7 +12,50 @@ from app.integrations.cloud_build_validation import (
     _build_needs_diagnostics,
     _validation_source_archive,
 )
-from app.integrations.validation_runner import payflow_commands
+from app.integrations.validation_runner import compute_patch_fingerprint, payflow_commands
+from app.models.task import Task, TaskStatus
+from app.schemas.execution import ExecutionRecord, ExecutionStatus
+from app.schemas.validation import ValidationCommandStatus, ValidationStatus
+
+
+def test_cloud_validation_skips_all_commands_without_a_profile(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    task = Task(
+        id="task-1",
+        title="A validation task",
+        description="Run configured checks",
+        repository_key="github-123",
+        status=TaskStatus.IN_PROGRESS,
+        created_at=now,
+        updated_at=now,
+        created_by="operator-1",
+    )
+    execution = ExecutionRecord(
+        id="execution-1",
+        task_id=task.id,
+        assigned_worker="coding-agent",
+        status=ExecutionStatus.QUEUED,
+        created_at=now,
+        updated_at=now,
+        repository_key=task.repository_key,
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("source\n", encoding="utf-8")
+    settings = Settings(_env_file=None, environment="testing", storage="memory")
+
+    report = CloudBuildValidationRunner(settings).run(
+        task,
+        execution,
+        workspace,
+        expected_fingerprint=compute_patch_fingerprint(workspace),
+    )
+
+    reason = "No validation profile is configured for this repository."
+    assert report.overall_status == ValidationStatus.SKIPPED
+    assert report.summary == f"Validation skipped: {reason}"
+    assert all(command.status == ValidationCommandStatus.SKIPPED for command in report.commands)
+    assert {command.error for command in report.commands} == {reason}
 
 
 def test_cloud_build_rejection_includes_sanitized_provider_reason() -> None:

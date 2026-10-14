@@ -15,6 +15,7 @@ import type {
   Mode,
   ModelChoices,
   Risk,
+  ValidationProfile,
   ValidationReport,
 } from '../domain/types';
 import type { User } from 'firebase/auth';
@@ -88,12 +89,23 @@ export interface ConnectedRepository {
   private?: boolean;
   mode?: 'app' | 'pat';
   account_login?: string;
+  validation_profile?: ValidationProfile | null;
 }
 export const listRepositories = (u: User | null, signal?: AbortSignal) =>
   request<{ items: ConnectedRepository[] }>(
     u,
     '/api/repositories',
     signal ? { signal } : {},
+  );
+export const updateRepositoryValidationProfile = (
+  u: User | null,
+  repositoryKey: string,
+  profile: ValidationProfile | null,
+) =>
+  request<ConnectedRepository>(
+    u,
+    `/api/repositories/${id(repositoryKey)}/validation-profile`,
+    { method: 'PATCH', body: JSON.stringify({ profile }) },
   );
 export const listSkills = (u: User | null, repositoryKey?: string) =>
   request<{ items: Skill[] }>(

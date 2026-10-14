@@ -45,6 +45,7 @@ import type {
   Risk,
   Task,
 } from './domain/types';
+import type { ValidationProfile } from './domain/types';
 import { useAuth } from './contexts/authState';
 import { useToast } from './contexts/toastState';
 import { useTasks } from './hooks/useTasks';
@@ -72,6 +73,7 @@ import {
   getGitHubConnection,
   listRepositories,
   removeRepository,
+  updateRepositoryValidationProfile,
   listRecentActivity,
   listTaskExecutions,
   listTaskHistory,
@@ -784,7 +786,7 @@ function ApprovalsPage() {
 }
 
 function RepositoriesPage() {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
   const toast = useToast();
   const [connection, setConnection] = useState<{
     configured: boolean;
@@ -943,6 +945,32 @@ function RepositoriesPage() {
       setBusy(false);
     }
   }
+  async function updateValidationProfile(
+    repo: Awaited<ReturnType<typeof listRepositories>>['items'][number],
+    profile: ValidationProfile | null,
+  ) {
+    setBusy(true);
+    try {
+      const updated = await updateRepositoryValidationProfile(
+        user,
+        repo.key,
+        profile,
+      );
+      setRepositories((items) =>
+        items.map((item) => (item.key === updated.key ? updated : item)),
+      );
+      toast('success', `Validation profile updated for ${repo.label}.`);
+    } catch (e) {
+      toast(
+        'error',
+        e instanceof Error
+          ? e.message
+          : 'Could not update the repository validation profile.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <>
       <Heading
@@ -1078,6 +1106,28 @@ function RepositoriesPage() {
                 Available for new tasks. Changes publish through a validated
                 pull request.
               </p>
+              {repo.mode === 'pat' && (
+                <label className="mt-4 block text-xs font-medium text-muted">
+                  Validation profile
+                  <select
+                    aria-label={`Validation profile for ${repo.label}`}
+                    className="mt-2 min-h-10 w-full rounded-xl border border-line bg-panel px-3 text-sm text-zinc-100"
+                    value={repo.validation_profile ?? ''}
+                    disabled={busy || role === 'viewer'}
+                    onChange={(event) =>
+                      void updateValidationProfile(
+                        repo,
+                        (event.target.value || null) as ValidationProfile | null,
+                      )
+                    }
+                  >
+                    <option value="">Not configured (checks will be skipped)</option>
+                    <option value="nexus_monorepo">
+                      NEXUS monorepo (backend + frontend)
+                    </option>
+                  </select>
+                </label>
+              )}
               {repo.owner && repo.repo && (
                 <a
                   className="mt-4 inline-block text-xs font-semibold text-mint hover:underline"

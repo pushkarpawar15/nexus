@@ -60,7 +60,11 @@ from app.repositories.tasks import (
 )
 from app.schemas.approval import ApprovalRequest
 from app.schemas.execution import ActivityEvent, ActivitySource, ExecutionModelRequest
-from app.schemas.github import GitHubPATConnectRequest, GitHubRepositoryRemovalRequest
+from app.schemas.github import (
+    GitHubPATConnectRequest,
+    GitHubRepositoryRemovalRequest,
+    RepositoryValidationProfileRequest,
+)
 from app.schemas.skills import SkillRecord, SkillWriteRequest
 from app.schemas.tasks import (
     AnalyzeTaskRequest,
@@ -347,6 +351,9 @@ def create_app(
             "private": bool(target.github_private),
             "mode": "pat",
             "account_login": connection.account_login,
+            "validation_profile": (
+                target.validation_profile.value if target.validation_profile else None
+            ),
         }
 
     async def pending_task_count(repository_key: str) -> int:
@@ -426,12 +433,35 @@ def create_app(
                 "base_branch": target.base_branch,
                 "private": bool(target.github_private),
                 "mode": "app",
+                "validation_profile": (
+                    target.validation_profile.value if target.validation_profile else None
+                ),
             }
             for key, target in runtime_settings.approved_repositories.items()
         }
         for connected in await github_connections.list_for_user(user.uid):
             items[connected.repository_key] = repository_connection_payload(connected)
         return {"items": [items[key] for key in sorted(items)]}
+
+    @app.patch("/api/repositories/{repository_key}/validation-profile")
+    async def set_repository_validation_profile(
+        repository_key: str,
+        request: RepositoryValidationProfileRequest,
+        user: UserIdentity = Depends(require_operator),
+    ) -> dict[str, Any]:
+        connection = await github_connections.get(user.uid, repository_key)
+        if connection is None:
+            raise NexusError(
+                ErrorCode.REPOSITORY_NOT_ALLOWED,
+                "Only a repository connected with a personal access token can be configured here.",
+                status_code=404,
+            )
+        target = connection.target.model_copy(update={"validation_profile": request.profile})
+        updated = connection.model_copy(update={"target": target})
+        await github_connections.put(updated)
+        runtime_settings.approved_repositories[repository_key] = target
+        await refresh_internal_repository_allowlist()
+        return repository_connection_payload(updated)
 
     @app.get("/api/repositories/{repository_key}/removal-impact")
     async def repository_removal_impact(

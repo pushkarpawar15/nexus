@@ -14,6 +14,12 @@ NEXUS verifies the token identity, repository identity, and write permission wit
 
 PAT connections belong to the Firebase user who added them. Repositories and their task history are visible only to users who have that repository connected (or have access through a GitHub App/configured repository). Removing a PAT repository first shows the number of pending tasks. Confirming removal revokes that user's saved credential and hides the repository's tasks from that user without deleting task, execution, activity, or pull-request records. Reconnecting the same GitHub repository restores visibility because task records use its stable GitHub repository ID.
 
+## Configure repository validation
+
+On a connected PAT repository card, an operator can select **NEXUS monorepo (backend + frontend)** when the checkout has `backend/` and `frontend/` directories. The profile runs the fixed NEXUS checks; it does not allow custom shell commands. The selection is persisted with the connected repository and is loaded by coding workers. Choose **Not configured** to clear it.
+
+Without a configured profile, all validation checks are recorded as **SKIPPED** with the same explanation. The execution stops in a blocked state so validation, security review, and PR publication are not treated as successful. Configure a profile and retry the task to run checks. The built-in PayFlow monorepo target retains its existing default profile.
+
 GitHub can require organization approval or SSO authorization before an organization token works. If verification fails, confirm the token is not expired, its resource owner and repository are correct, and both required permissions are enabled.
 
 ## 1. Register a GitHub App
@@ -85,11 +91,11 @@ NEXUS_VALIDATION_ENABLED=true
 NEXUS_AI_PERMISSIONS=ai_execute,ai_validate,security_review
 ```
 
-Restart the backend after changing these settings. The built-in validation profile covers the PayFlow monorepo (`backend/` and `frontend/`); a PAT-connected repository named `payflow` is matched to this profile when both directories exist. Other repository layouts remain blocked from PR publication until a matching validator profile and images are configured. The example environment deliberately leaves the worker flags and AI permissions off.
+Restart the backend after changing these settings. The built-in validation profile covers the PayFlow monorepo (`backend/` and `frontend/`); a PAT-connected repository named `payflow` is matched to this profile when both directories exist. Other repository layouts need an explicitly selected supported profile or their checks will be skipped. The example environment deliberately leaves the worker flags and AI permissions off.
 
 When an execution is requested, the isolated worker creates a branch, asks the coding model for bounded file operations, runs the configured Docker validation checks, and performs security review. A validated task opens a PR automatically when human approval is not required. If approval is required, approving the patch opens the PR; transient publication failures keep a retry action on the task page.
 
-The current built-in validation profile is still the NEXUS PayFlow monorepo profile. Other repository layouts are safely blocked from PR publication until a matching validation profile and validator images are configured. A GitHub connection by itself does not make an arbitrary repository safe to execute or validate.
+The current built-in validation profile is still the NEXUS PayFlow monorepo profile. A GitHub connection by itself does not make an arbitrary repository safe to execute or validate, and a skipped profile never satisfies validation or publication gates.
 
 ## 6. Hosted boundary
 

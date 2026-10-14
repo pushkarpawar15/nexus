@@ -13,6 +13,7 @@ class ValidationStatus(str, Enum):
     PASSED = "PASSED"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
+    SKIPPED = "SKIPPED"
 
 
 class ValidationCommandStatus(str, Enum):
@@ -21,6 +22,7 @@ class ValidationCommandStatus(str, Enum):
     TIMED_OUT = "TIMED_OUT"
     UNAVAILABLE = "UNAVAILABLE"
     UNEXECUTED = "UNEXECUTED"
+    SKIPPED = "SKIPPED"
 
 
 class ValidationCommandResult(UtcTimestampModel):

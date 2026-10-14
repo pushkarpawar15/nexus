@@ -27,6 +27,7 @@ export type TaskType =
 export type Risk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type Complexity = 'LOW' | 'MEDIUM' | 'HIGH';
 export type Mode = 'AI' | 'HUMAN' | 'HYBRID';
+export type ValidationProfile = 'nexus_monorepo';
 export interface ExecutionPlanInput {
   title?: string;
   risk: Risk;
@@ -167,7 +168,7 @@ export interface ValidationReport {
   execution_id: string;
   task_id: string;
   patch_fingerprint: string;
-  overall_status: 'PASSED' | 'FAILED' | 'BLOCKED';
+  overall_status: 'PASSED' | 'FAILED' | 'BLOCKED' | 'SKIPPED';
   started_at: string;
   finished_at: string;
   summary: string;
