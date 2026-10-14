@@ -146,6 +146,34 @@ def test_failed_check_cannot_be_marked_passed_with_nonzero_exit_code(tmp_path: P
     assert report.commands[0].error == "Vitest: One test failed."
 
 
+def test_unexecuted_check_blocks_without_being_classified_as_a_code_failure(
+    tmp_path: Path,
+) -> None:
+    task, execution = records()
+    workspace = make_workspace(tmp_path / "workspace")
+    output = AgentValidationOutput(
+        outcome="BLOCKED",
+        summary="npm dependencies could not be installed in the sandbox.",
+        checks=[
+            AgentValidationCheck(
+                name="Vitest",
+                command="npm test",
+                status="UNEXECUTED",
+                summary="The locked dependency install was unavailable.",
+                stderr_excerpt="Registry access was denied.",
+            )
+        ],
+    )
+
+    report = run_with_output(task, execution, workspace, output)
+
+    assert report.overall_status == ValidationStatus.BLOCKED
+    assert report.commands[0].status == ValidationCommandStatus.UNEXECUTED
+    assert report.commands[0].exit_code is None
+    assert report.commands[0].error == "Vitest: The locked dependency install was unavailable."
+    assert report.commands[0].stderr_excerpt == "Registry access was denied."
+
+
 def test_validation_preserves_the_original_workspace_fingerprint(tmp_path: Path) -> None:
     task, execution = records()
     workspace = make_workspace(tmp_path / "workspace")
@@ -300,6 +328,29 @@ def test_validation_still_requires_a_result_for_each_reported_check() -> None:
         assert "2 validation checks" in str(exc)
     else:
         raise AssertionError("Validation must reject incomplete command results.")
+
+
+def test_blocked_validation_requires_evidence_of_an_environment_attempt() -> None:
+    output = AgentValidationOutput(
+        outcome="BLOCKED",
+        summary="The test runtime is unavailable.",
+        checks=[
+            AgentValidationCheck(
+                name="Vitest",
+                command="npm test",
+                status="UNEXECUTED",
+                summary="npm could not be installed from the lockfile.",
+            )
+        ],
+    )
+
+    validation_runner._validate_agent_command_results(output, 1, 1)
+    try:
+        validation_runner._validate_agent_command_results(output, 0, 0)
+    except ValueError as exc:
+        assert "observed 0 command calls and 0 command results" in str(exc)
+    else:
+        raise AssertionError("A blocked check must include observed environment evidence.")
 
 
 def test_validation_cannot_claim_checks_without_running_commands() -> None:
