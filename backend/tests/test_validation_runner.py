@@ -183,6 +183,49 @@ def test_validation_policy_allows_only_configured_agent_tools() -> None:
     assert asyncio.run(decide(types.BuiltinTools.CREATE_FILE)).allow is False
 
 
+def test_validation_command_result_hook_captures_only_run_command_results() -> None:
+    tool_results: list[str] = []
+    tool_errors: list[str] = []
+    hook = validation_runner._validation_command_result_hook(tool_results, tool_errors)
+    context = OperationContext(TurnContext(SessionContext()))
+
+    async def record(result: types.ToolResult) -> None:
+        await hook.run(context, result)
+
+    asyncio.run(
+        record(
+            types.ToolResult(
+                id="command-1",
+                name=types.BuiltinTools.RUN_COMMAND,
+                result={"exit_code": 0, "stdout": "All tests passed."},
+            )
+        )
+    )
+    asyncio.run(
+        record(
+            types.ToolResult(
+                id="view-1",
+                name=types.BuiltinTools.VIEW_FILE,
+                result="package.json",
+            )
+        )
+    )
+    asyncio.run(
+        record(
+            types.ToolResult(
+                id="command-2",
+                name=types.BuiltinTools.RUN_COMMAND,
+                error="Command timed out.",
+            )
+        )
+    )
+
+    assert len(tool_results) == 2
+    assert "All tests passed." in tool_results[0]
+    assert tool_results[1] == "Command timed out."
+    assert tool_errors == ["Command timed out."]
+
+
 def test_repository_discovery_commands_need_not_each_be_a_validation_check() -> None:
     output = AgentValidationOutput(
         outcome="PASSED",
