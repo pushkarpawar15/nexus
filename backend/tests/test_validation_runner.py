@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+
+from google.antigravity import types
+from google.antigravity.hooks.hooks import OperationContext, SessionContext, TurnContext
+from google.antigravity.hooks.policy import enforce
 
 from app.core.config import Settings
 from app.integrations import validation_runner
@@ -164,3 +169,30 @@ def test_validation_preserves_the_original_workspace_fingerprint(tmp_path: Path)
     assert report.overall_status == ValidationStatus.PASSED
     assert compute_patch_fingerprint(workspace) == before
     assert validation_runner.MAX_TOTAL_SOURCE_BYTES == 30 * 1024 * 1024
+
+
+def test_validation_policy_allows_only_configured_agent_tools() -> None:
+    hook = enforce(validation_runner._validation_agent_policies())
+    context = OperationContext(TurnContext(SessionContext()))
+
+    async def decide(tool_name: str):
+        return await hook.run(context, types.ToolCall(name=tool_name))
+
+    assert asyncio.run(decide(types.BuiltinTools.RUN_COMMAND)).allow is True
+    assert asyncio.run(decide(types.BuiltinTools.VIEW_FILE)).allow is True
+    assert asyncio.run(decide(types.BuiltinTools.CREATE_FILE)).allow is False
+
+
+def test_no_checks_is_invalid_after_a_command_was_attempted() -> None:
+    output = AgentValidationOutput(
+        outcome="NO_CHECKS",
+        summary="Command execution was denied by the environment policy.",
+        checks=[],
+    )
+
+    try:
+        validation_runner._validate_agent_command_results(output, 1, 1)
+    except ValueError as exc:
+        assert "completed command executions" in str(exc)
+    else:
+        raise AssertionError("An attempted command must not be reported as NO_CHECKS.")
