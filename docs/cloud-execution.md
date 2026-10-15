@@ -4,6 +4,8 @@ NEXUS can run coding tasks without a developer machine or Docker daemon. The API
 
 For npm projects, the worker provisions dependencies in the isolated validation copy from `package-lock.json` before starting the sandbox. It allows only `registry.npmjs.org`, disables lifecycle scripts, and does not pass worker credentials to npm. The Antigravity sandbox remains offline; if safe dependency setup fails, dependent checks are reported as unexecuted and validation is blocked.
 
+Before proposing file changes, the coding model receives repository manifests, recognized formatter configuration, nearby source context, and the current contents of changed files where available. It is instructed to match the repository's formatting rules, correct reported formatting failures, and leave unrelated files untouched. Validation remains authoritative and runs the repository's own checks; formatter checks are scoped to changed files using the repository-configured formatter so pre-existing formatting issues elsewhere do not block an unrelated patch. The worker does not impose a formatter or fixed project-specific formatting command.
+
 The API and worker run as separate Cloud Run identities. Do not put GitHub credentials or model credentials in Firebase Hosting or `VITE_*` settings. GitHub App installations remain workspace-wide. Fine-grained PAT repositories belong to the Firebase user who adds them; repository metadata is stored in Firestore and each PAT value is stored in Google Secret Manager. The API identity needs permission to create, update, read, and delete PAT secrets. The worker identity needs access to the `nexus-github-*` secrets so executions continue after instances restart.
 
 ## 1. Choose the GCP project and region
@@ -164,6 +166,26 @@ In Firebase Hosting build settings, set `VITE_API_BASE_URL` to the deployed Clou
 
 Connect the GitHub App installation in NEXUS, select an installed repository, analyze a simple task, then run it. The task activity should show the remote workspace, coding stage, Antigravity-discovered validation results, security review, and PR creation/approval state. Execution logs are available from the Cloud Run Job execution in Cloud Console. Stopping a task cancels its Cloud Run Job execution and active Antigravity validation.
 
+## Repeat deployments
+
+From the repository root, use the executable deployment scripts:
+
+```sh
+scripts/deploy-backend.sh
+scripts/deploy-ui.sh
+scripts/deploy-all.sh
+```
+
+The backend script deploys configured Firestore indexes, builds, and deploys both the API service and worker job. The UI script builds the frontend and deploys Firebase Hosting. The combined script runs the backend deployment first and deploys the UI only if that succeeds.
+
+The scripts default to project `nexus-265f0`, region `asia-south1`, Artifact Registry repository `nexus`, service `nexus-api`, and job `nexus-execution-worker`. Override defaults with environment variables when deploying another environment, for example:
+
+```sh
+PROJECT_ID=your-project REGION=us-central1 scripts/deploy-all.sh
+```
+
+The backend image tag defaults to the current Git commit. If the working tree is dirty, the script prints a warning and adds a UTC timestamp so the deployed images remain uniquely identifiable. Set `IMAGE_TAG` explicitly to override it. The UI uses Vite's normal production environment files (such as `frontend/.env.production.local`) for public build-time configuration. Authenticate the `gcloud` and Firebase CLIs for the target project before deploying.
+
 ## What runs where
 
 | Component | GCP service | Persistent data |
@@ -175,3 +197,5 @@ Connect the GitHub App installation in NEXUS, select an installed repository, an
 | Models | Vertex AI | No local model server or API key required |
 
 Add a GCS lifecycle rule for `execution-workspaces/` as a safety net after choosing a retention period. Cloud billing and GitHub App installation remain account setup tasks; this guide does not create resources automatically.
+
+Task detail loads the core task and execution first, then refreshes larger evidence and activity separately. Activity history is fetched in indexed pages of 100 events, and the UI polls less frequently when the task is idle or the browser tab is hidden. When setting up or migrating Firestore indexes, deploy the configured index definitions with `firebase deploy --only firestore:indexes --project PROJECT_ID`.

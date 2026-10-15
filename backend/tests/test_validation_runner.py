@@ -221,6 +221,14 @@ def test_validation_policy_allows_only_configured_agent_tools() -> None:
     assert asyncio.run(decide(types.BuiltinTools.CREATE_FILE)).allow is False
 
 
+def test_validation_instructions_scope_format_checks_to_changed_files() -> None:
+    assert "task.changed_files" in validation_runner._VALIDATION_AGENT_SYSTEM_INSTRUCTIONS
+    assert "repository-wide format check" in validation_runner._VALIDATION_AGENT_SYSTEM_INSTRUCTIONS
+    assert "Scope formatting checks to changed files" in (
+        validation_runner._VALIDATION_TASK_INSTRUCTIONS
+    )
+
+
 def test_validation_command_result_hook_captures_only_run_command_results() -> None:
     tool_results: list[str] = []
     tool_errors: list[str] = []
@@ -436,10 +444,7 @@ def test_locked_npm_dependencies_use_registry_and_ignore_project_npmrc(
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert "GITHUB_TOKEN" not in kwargs["env"]
-    assert (
-        kwargs["env"]["npm_config_userconfig"]
-        != kwargs["env"]["npm_config_globalconfig"]
-    )
+    assert kwargs["env"]["npm_config_userconfig"] != kwargs["env"]["npm_config_globalconfig"]
 
 
 def test_npm_lockfile_rejects_package_urls_outside_public_registry(tmp_path: Path) -> None:
