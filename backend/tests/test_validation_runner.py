@@ -18,6 +18,7 @@ from app.integrations.validation_runner import (
     AgentValidationCheck,
     AgentValidationOutput,
     AntigravityValidationRunner,
+    _request_validation_output,
     _run_isolated_antigravity_call,
     compute_patch_fingerprint,
 )
@@ -67,6 +68,66 @@ def _hang_in_antigravity_worker() -> None:
 
 def _exit_without_antigravity_result() -> None:
     os._exit(17)
+
+
+def test_missing_antigravity_structured_output_retries_once() -> None:
+    class FakeResponse:
+        def __init__(self, structured):
+            self.structured = structured
+
+        async def resolve(self):
+            return []
+
+        async def structured_output(self):
+            return self.structured
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+            self.responses = [
+                FakeResponse(None),
+                FakeResponse(
+                    {"outcome": "NO_CHECKS", "summary": "No checks were applicable.", "checks": []}
+                ),
+            ]
+
+        async def chat(self, prompt):
+            self.prompts.append(prompt)
+            return self.responses.pop(0)
+
+    async def run() -> None:
+        agent = FakeAgent()
+        output, chunks = await _request_validation_output(agent, "check the repository")
+        assert output.outcome == "NO_CHECKS"
+        assert chunks == []
+        assert len(agent.prompts) == 2
+        assert "required structured validation result" in agent.prompts[1]
+
+    asyncio.run(run())
+
+
+def test_missing_antigravity_structured_output_returns_clear_error() -> None:
+    class FakeResponse:
+        stop_reason = "STOP"
+
+        async def resolve(self):
+            return []
+
+        async def structured_output(self):
+            return None
+
+    class FakeAgent:
+        async def chat(self, _prompt):
+            return FakeResponse()
+
+    async def run() -> None:
+        with pytest.raises(
+            RuntimeError,
+            match="ended without a structured validation result after one retry",
+        ):
+            await _request_validation_output(FakeAgent(), "check the repository")
+
+    asyncio.run(run())
 
 
 def test_antigravity_startup_timeout_kills_isolated_worker_process() -> None:

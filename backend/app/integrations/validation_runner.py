@@ -180,6 +180,36 @@ class AntigravityTimeoutError(TimeoutError):
     """Raised when an isolated Antigravity request exceeds its stage budget."""
 
 
+async def _request_validation_output(agent, prompt: str) -> tuple[AgentValidationOutput, list]:
+    """Require a structured final answer and retry once when the agent omits it."""
+    response = await agent.chat(prompt)
+    chunks = await response.resolve()
+    structured = await response.structured_output()
+    if structured is None:
+        response = await agent.chat(
+            "Your previous turn ended without its required structured validation result. "
+            "Return the result now using the configured schema. Base it only on checks and "
+            "command output already observed; do not claim a check passed unless it ran."
+        )
+        chunks.extend(await response.resolve())
+        structured = await response.structured_output()
+    if structured is None:
+        stop_reason = getattr(response, "stop_reason", None)
+        detail = f" (stop reason: {stop_reason})" if stop_reason else ""
+        raise RuntimeError(
+            "Antigravity repository checks ended without a structured validation result "
+            f"after one retry{detail}."
+        )
+    try:
+        output = AgentValidationOutput.model_validate(structured)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Antigravity repository checks returned a structured result that did not "
+            "match the validation schema."
+        ) from exc
+    return output, chunks
+
+
 def _antigravity_process_entry(connection, target, args, kwargs) -> None:
     """Run an Antigravity call in its own process group so hangs can be killed."""
     try:
@@ -1409,9 +1439,9 @@ class AntigravityValidationRunner:
                     else "The Antigravity command sandbox is unavailable."
                 )
                 raise RuntimeError(f"Validation blocked for safety: {reason}")
-            response = await agent.chat(json.dumps(prompt, ensure_ascii=False))
-            chunks = await response.resolve()
-            structured = await response.structured_output()
+            output, chunks = await _request_validation_output(
+                agent, json.dumps(prompt, ensure_ascii=False)
+            )
             command_calls = 0
             for chunk in chunks:
                 if (
@@ -1419,7 +1449,6 @@ class AntigravityValidationRunner:
                     and chunk.name == types.BuiltinTools.RUN_COMMAND
                 ):
                     command_calls += 1
-            output = AgentValidationOutput.model_validate(structured)
             _validate_agent_command_results(
                 output,
                 command_calls,
