@@ -178,6 +178,37 @@ def test_format_hook_installs_ruff_when_worker_image_lacks_it(tmp_path, monkeypa
     assert calls[1][1:4] == ["-m", "ruff", "format"]
 
 
+def test_format_hook_bootstraps_missing_pip_before_installing_ruff(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "app" / "models.py"
+    target.parent.mkdir()
+    target.write_text("value={'currency':'IDR'}", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[tool.ruff]\n", encoding="utf-8")
+    operation = FileOperation(
+        operation="create", path="app/models.py", content=target.read_text(encoding="utf-8")
+    )
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if command[1:3] == ["-m", "pip"] and sum("pip" in call for call in calls) == 1:
+            return SimpleNamespace(returncode=1, stdout="", stderr="No module named pip")
+        if command[1:3] == ["-m", "ruff"]:
+            target.write_text("value = {'currency': 'IDR'}\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.coding_agent.shutil.which", lambda _name: None)
+    monkeypatch.setattr("app.services.coding_agent.importlib.util.find_spec", lambda _name: None)
+    monkeypatch.setattr("app.services.coding_agent.subprocess.run", fake_run)
+
+    formatted, skipped, errors = _format_proposed_files(tmp_path, [operation])
+
+    assert formatted == ["app/models.py"]
+    assert skipped == []
+    assert errors == []
+    assert calls[1][1:4] == ["-m", "ensurepip", "--upgrade"]
+    assert calls[2][1:3] == ["-m", "pip"]
+
+
 def test_format_hook_installs_locked_prettier_when_worker_has_no_node_modules(
     tmp_path, monkeypatch
 ) -> None:

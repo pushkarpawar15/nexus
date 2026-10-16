@@ -468,20 +468,21 @@ def _format_proposed_files(
             return False, f"Could not resolve repository Ruff version: {exc}"[:500]
         with tempfile.TemporaryDirectory(prefix="nexus-ruff-format-") as temporary:
             environment = formatter_environment(temporary)
+            install_command = [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "--no-input",
+                "--only-binary=:all:",
+                "--index-url=https://pypi.org/simple",
+                f"--target={temporary}",
+                ruff_requirement,
+            ]
             try:
                 install = subprocess.run(
-                    [
-                        sys.executable,
-                        "-m",
-                        "pip",
-                        "install",
-                        "--disable-pip-version-check",
-                        "--no-input",
-                        "--only-binary=:all:",
-                        "--index-url=https://pypi.org/simple",
-                        f"--target={temporary}",
-                        ruff_requirement,
-                    ],
+                    install_command,
                     cwd=root,
                     env=environment,
                     capture_output=True,
@@ -491,6 +492,36 @@ def _format_proposed_files(
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 return False, str(exc)[:500]
+            pip_missing = "no module named pip" in (install.stderr or "").lower()
+            if install.returncode != 0 and pip_missing:
+                try:
+                    bootstrap = subprocess.run(
+                        [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
+                        cwd=root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    return False, f"Python pip bootstrap failed: {exc}"[:500]
+                if bootstrap.returncode != 0:
+                    return False, redact_credentials(
+                        bootstrap.stderr or bootstrap.stdout or "Python pip bootstrap failed"
+                    )[:500]
+                try:
+                    install = subprocess.run(
+                        install_command,
+                        cwd=root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    return False, str(exc)[:500]
             if install.returncode != 0:
                 return False, redact_credentials(
                     install.stderr or install.stdout or "Ruff installation failed"
