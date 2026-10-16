@@ -285,8 +285,19 @@ export const getExecution = (u: User | null, executionId: string) =>
   request<Execution>(u, `/api/executions/${id(executionId)}`);
 export const getExecutionDiff = (u: User | null, executionId: string) =>
   request<ExecutionDiff>(u, `/api/executions/${id(executionId)}/diff`);
-export const listTaskHistory = (u: User | null, taskId: string) =>
-  request<Activity[]>(u, `/api/tasks/${id(taskId)}/history`);
+export interface ActivityPage {
+  items: Activity[];
+  has_more: boolean;
+}
+export const listTaskHistory = (
+  u: User | null,
+  taskId: string,
+  before?: string,
+) =>
+  request<ActivityPage>(
+    u,
+    `/api/tasks/${id(taskId)}/history${q({ limit: 100, before })}`,
+  );
 export const listExecutionActivity = (u: User | null, executionId: string) =>
   request<Activity[]>(u, `/api/executions/${id(executionId)}/activity`);
 export const listRecentActivity = (u: User | null, limit = 50) =>

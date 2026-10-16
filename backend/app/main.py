@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -222,21 +223,33 @@ def create_app(
     )
     app.dependency_overrides[get_settings] = lambda: runtime_settings
 
+    github_allowlist_refreshed_at = 0.0
+    github_allowlist_refresh_lock = asyncio.Lock()
+
     @app.middleware("http")
     async def refresh_github_repository_allowlist(request: Request, call_next):
-        if runtime_settings.github_app_slug and request.url.path.startswith("/api/"):
-            try:
-                connection = await github_app.status()
-                if connection["connected"]:
-                    targets = await github_app.repositories()
-                    runtime_settings.approved_repositories = {
-                        f"github-{target.github_repository_id}": target for target in targets
-                    }
-                    setter = getattr(task_repository, "set_approved_repository_keys", None)
-                    if setter:
-                        setter(runtime_settings.approved_repository_keys)
-            except GitHubAppError:
-                pass
+        nonlocal github_allowlist_refreshed_at
+        if (
+            runtime_settings.github_app_slug
+            and request.url.path.startswith("/api/")
+            and time.monotonic() - github_allowlist_refreshed_at >= 60
+        ):
+            async with github_allowlist_refresh_lock:
+                if time.monotonic() - github_allowlist_refreshed_at >= 60:
+                    try:
+                        connection = await github_app.status()
+                        if connection["connected"]:
+                            targets = await github_app.repositories()
+                            runtime_settings.approved_repositories = {
+                                f"github-{target.github_repository_id}": target
+                                for target in targets
+                            }
+                            setter = getattr(task_repository, "set_approved_repository_keys", None)
+                            if setter:
+                                setter(runtime_settings.approved_repository_keys)
+                        github_allowlist_refreshed_at = time.monotonic()
+                    except GitHubAppError:
+                        github_allowlist_refreshed_at = time.monotonic()
         return await call_next(request)
 
     @app.exception_handler(NexusError)
@@ -301,7 +314,6 @@ def create_app(
 
     async def repository_keys_for_user(user: UserIdentity) -> frozenset[str]:
         connections = await github_connections.list_for_user(user.uid)
-        await refresh_internal_repository_allowlist()
         return runtime_settings.approved_repository_keys | frozenset(
             connection.repository_key for connection in connections
         )
@@ -402,6 +414,7 @@ def create_app(
     async def list_repositories(
         user: UserIdentity = Depends(require_viewer),
     ) -> dict[str, list[dict[str, Any]]]:
+        nonlocal github_allowlist_refreshed_at
         if app.state.github_app.configured:
             connection = await app.state.github_app.status()
             if connection["connected"]:
@@ -415,6 +428,7 @@ def create_app(
                 setter = getattr(task_repository, "set_approved_repository_keys", None)
                 if setter:
                     setter(runtime_settings.approved_repository_keys)
+            github_allowlist_refreshed_at = time.monotonic()
         items: dict[str, dict[str, Any]] = {
             key: {
                 "key": key,
@@ -563,8 +577,10 @@ def create_app(
     async def github_setup_callback(
         installation_id: int = Query(..., ge=1), state: str = Query(..., min_length=1)
     ):
+        nonlocal github_allowlist_refreshed_at
         try:
             account = await app.state.github_app.save_installation(installation_id, state)
+            github_allowlist_refreshed_at = 0.0
             redirect_url = (
                 f"{runtime_settings.frontend_url.rstrip('/')}/repositories?connected=1&account="
                 f"{__import__('urllib.parse', fromlist=['quote']).quote(account)}"
@@ -578,7 +594,9 @@ def create_app(
 
     @app.delete("/api/github/connection", status_code=204)
     async def disconnect_github(_: UserIdentity = Depends(require_operator)):
+        nonlocal github_allowlist_refreshed_at
         await app.state.github_app.disconnect()
+        github_allowlist_refreshed_at = time.monotonic()
         runtime_settings.approved_repositories = {}
         setter = getattr(task_repository, "set_approved_repository_keys", None)
         if setter:
@@ -587,6 +605,7 @@ def create_app(
 
     @app.post("/api/github/webhook", include_in_schema=False)
     async def github_webhook(request: Request):
+        nonlocal github_allowlist_refreshed_at
         body = await request.body()
         signature = request.headers.get("x-hub-signature-256")
         if not github_app.verify_webhook(body, signature):
@@ -596,6 +615,7 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid webhook payload.") from exc
         await github_app.handle_webhook(request.headers.get("x-github-event", ""), payload)
+        github_allowlist_refreshed_at = 0.0
         if request.headers.get("x-github-event", "") == "pull_request":
             await github_pr_service.handle_pull_request_webhook(payload)
         return {"received": True}
@@ -1062,10 +1082,27 @@ def create_app(
         return record
 
     @app.get("/api/tasks/{task_id}/history")
-    async def task_history(task_id: str, user: UserIdentity = Depends(require_viewer)):
+    async def task_history(
+        task_id: str,
+        limit: int | None = Query(default=None, ge=1, le=200),
+        before: str | None = Query(default=None, max_length=64),
+        user: UserIdentity = Depends(require_viewer),
+    ):
         await get_task_or_404(task_id, user)
-        events = await workflow_repositories.activity_events.list_for_task(task_id)
-        return sorted(events, key=lambda event: (event.occurred_at, event.id))
+        if limit is None and before is None:
+            events = await workflow_repositories.activity_events.list_for_task(task_id)
+            return sorted(events, key=lambda event: (event.occurred_at, event.id))
+        page_limit = limit or 100
+        events = await workflow_repositories.activity_events.list_for_task_page(
+            task_id, limit=page_limit + 1, before=before
+        )
+        has_more = len(events) > page_limit
+        page = events[:page_limit]
+        page.sort(key=lambda event: (event.occurred_at, event.id), reverse=True)
+        return {
+            "items": page,
+            "has_more": has_more,
+        }
 
     @app.get("/api/executions/{execution_id}/activity")
     async def execution_activity(execution_id: str, user: UserIdentity = Depends(require_viewer)):

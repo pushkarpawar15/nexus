@@ -43,7 +43,7 @@ The app factory selects Firestore explicitly outside test mode. A Firestore conn
 
 - **Analysis proposal rejected:** one repair follows the initial proposal. A second invalid result records the rejection reason and asks an operator to clarify scope; the answer is sent to the planner for re-analysis.
 - **Coding proposal rejected:** two repairs follow the initial proposal. A coding error or exhausted repair count asks for operator guidance. A live worker applies it in the same workspace; if the worker already stopped, the answer starts a fresh isolated execution.
-- **Validation fails:** up to three code repairs run, each followed by validation. At the limit, the task asks for guidance and continues the repair loop after the answer.
+- **Validation fails:** the validation agent receives the task plan's steps and validation checklist, and reports each failed command to the coding agent. The coding agent reviews the patch against those diagnostics before returning a repair. Up to three repairs run, each followed by repository validation again. At the limit, the task asks for guidance and continues the repair loop after the answer.
 - **Security findings:** up to two code repairs run, with fresh validation and security review each time. At the limit, the task asks for guidance, then returns through coding, validation, and security review.
 - **Security review cannot complete:** the task shows the review reason and asks an operator to resolve the reported issue or request another review.
 - **Workspace or repository setup fails:** the worker reports the setup error and blocks execution. After credentials or configuration are fixed, an operator can retry.

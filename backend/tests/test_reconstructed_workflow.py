@@ -118,6 +118,15 @@ def test_analysis_route_persists_policy_enforced_plan_and_activity() -> None:
             "analysis.started",
             "analysis.completed",
         ]
+        latest_page = client.get(f"/api/tasks/{task_id}/history?limit=1", headers=headers).json()
+        assert latest_page["has_more"] is True
+        assert latest_page["items"][0]["event_type"] == "analysis.completed"
+        older_page = client.get(
+            f"/api/tasks/{task_id}/history?limit=1&before={latest_page['items'][0]['occurred_at']}",
+            headers=headers,
+        ).json()
+        assert older_page["has_more"] is False
+        assert older_page["items"][0]["event_type"] == "analysis.started"
 
 
 def _git(cwd, *args):

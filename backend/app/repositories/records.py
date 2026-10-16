@@ -3,6 +3,7 @@ from __future__ import annotations
 from asyncio import Lock
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Generic, Protocol, TypeVar
 
 from pydantic import BaseModel
@@ -48,6 +49,10 @@ class ImmutableRecordRepository(Protocol, Generic[RecordT]):
 
     async def list_for_task(self, task_id: str) -> list[RecordT]: ...
 
+    async def list_for_task_page(
+        self, task_id: str, *, limit: int, before: str | None = None
+    ) -> list[RecordT]: ...
+
 
 class FirestoreRecordRepository(Generic[RecordT]):
     """Typed adapter for one top-level workflow collection."""
@@ -80,6 +85,20 @@ class FirestoreRecordRepository(Generic[RecordT]):
 
     async def list_for_task(self, task_id: str) -> list[RecordT]:
         query = self._collection.where("task_id", "==", task_id)
+        snapshots = [snapshot async for snapshot in query.stream()]
+        records = [self.model_type.model_validate(item.to_dict()) for item in snapshots]
+        records.sort(key=_record_sort_key, reverse=True)
+        return records
+
+    async def list_for_task_page(
+        self, task_id: str, *, limit: int, before: str | None = None
+    ) -> list[RecordT]:
+        from google.cloud.firestore_v1.base_query import BaseQuery
+
+        query = self._collection.where("task_id", "==", task_id)
+        if before is not None:
+            query = query.where("occurred_at", "<", before)
+        query = query.order_by("occurred_at", direction=BaseQuery.DESCENDING).limit(limit)
         snapshots = [snapshot async for snapshot in query.stream()]
         records = [self.model_type.model_validate(item.to_dict()) for item in snapshots]
         records.sort(key=_record_sort_key, reverse=True)
@@ -148,6 +167,22 @@ class MemoryRecordRepository(Generic[RecordT]):
             ]
         records.sort(key=_record_sort_key, reverse=True)
         return records
+
+    async def list_for_task_page(
+        self, task_id: str, *, limit: int, before: str | None = None
+    ) -> list[RecordT]:
+        before_time = (
+            datetime.fromisoformat(before.replace("Z", "+00:00")) if before is not None else None
+        )
+        async with self._lock:
+            records = [
+                deepcopy(record)
+                for record in self._records.values()
+                if getattr(record, "task_id", None) == task_id
+                and (before_time is None or getattr(record, "occurred_at") < before_time)
+            ]
+        records.sort(key=_record_sort_key, reverse=True)
+        return records[:limit]
 
     async def replace(self, record: RecordT, *, expected_updated_at: Any = None) -> RecordT:
         async with self._lock:

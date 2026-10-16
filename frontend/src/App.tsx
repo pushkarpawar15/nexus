@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -1130,6 +1131,9 @@ function TaskDetail() {
   const [task, setTask] = useState<Task | null>(null);
   const [executions, setExecutions] = useState<Execution[]>([]);
   const [history, setHistory] = useState<Activity[]>([]);
+  const [historyBefore, setHistoryBefore] = useState<string | null>(null);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [approvals, setApprovals] = useState<
     Awaited<ReturnType<typeof listApprovals>>
   >([]);
@@ -1161,6 +1165,13 @@ function TaskDetail() {
   const [riskReason, setRiskReason] = useState('');
   const [humanAnswer, setHumanAnswer] = useState('');
   const [approvalReason, setApprovalReason] = useState('');
+  const coreLoading = useRef(false);
+  const slowRefreshLoading = useRef(false);
+  const evidenceLoading = useRef(false);
+  const slowRefreshAt = useRef(0);
+  const evidenceRefreshAt = useRef(0);
+  const evidenceExecutionId = useRef('');
+  const historyLoadedOlder = useRef(false);
   const latestExecutionStatus = executions.at(-1)?.status;
   const executionActive =
     ['QUEUED', 'RUNNING'].includes(latestExecutionStatus || '') ||
@@ -1183,51 +1194,131 @@ function TaskDetail() {
       active = false;
     };
   }, [user]);
-  const load = useCallback(async () => {
-    try {
-      const [t, ex, h, decisions] = await Promise.all([
-        getTask(user, taskId),
-        listTaskExecutions(user, taskId),
-        listTaskHistory(user, taskId),
-        listApprovals(user, taskId),
-      ]);
-      setTask(t);
-      setExecutions(ex);
-      setHistory(dedupeActivity([...h, ...taskActivity(t)]));
-      setApprovals(decisions);
-      const latest = ex.at(-1);
-      if (latest) {
-        const [v, s, p, e] = await Promise.all([
-          getValidationReport(user, latest.id),
-          getSecurityReview(user, latest.id),
-          getPullRequest(user, latest.id),
-          getPullRequestEligibility(user, latest.id),
+  const load = useCallback(
+    async (forceDetails = false) => {
+      if (coreLoading.current) return;
+      coreLoading.current = true;
+      try {
+        const [t, ex] = await Promise.all([
+          getTask(user, taskId),
+          listTaskExecutions(user, taskId),
         ]);
-        setValidation(v);
-        setSecurity(s);
-        setPr(p);
-        setEligibility(e);
-      } else {
-        setValidation(null);
-        setSecurity(null);
-        setPr(null);
-        setEligibility({ eligible: false, reason: null });
+        setTask(t);
+        setExecutions(ex);
+        setError('');
+        setLoading(false);
+        const latest = ex.at(-1);
+        if (latest) {
+          if (
+            !evidenceLoading.current &&
+            (forceDetails ||
+              latest.id !== evidenceExecutionId.current ||
+              Date.now() - evidenceRefreshAt.current >= 10_000)
+          ) {
+            evidenceLoading.current = true;
+            evidenceExecutionId.current = latest.id;
+            void Promise.all([
+              getValidationReport(user, latest.id),
+              getSecurityReview(user, latest.id),
+              getPullRequest(user, latest.id),
+              getPullRequestEligibility(user, latest.id),
+            ])
+              .then(([v, s, p, e]) => {
+                setValidation(v);
+                setSecurity(s);
+                setPr(p);
+                setEligibility(e);
+                evidenceRefreshAt.current = Date.now();
+              })
+              .catch((e: unknown) => {
+                setError(
+                  e instanceof Error
+                    ? e.message
+                    : 'Could not refresh execution evidence.',
+                );
+              })
+              .finally(() => {
+                evidenceLoading.current = false;
+              });
+          }
+        } else {
+          setValidation(null);
+          setSecurity(null);
+          setPr(null);
+          setEligibility({ eligible: false, reason: null });
+          evidenceExecutionId.current = '';
+        }
+        if (
+          !slowRefreshLoading.current &&
+          (forceDetails || Date.now() - slowRefreshAt.current >= 30_000)
+        ) {
+          slowRefreshLoading.current = true;
+          void Promise.all([
+            listTaskHistory(user, taskId),
+            listApprovals(user, taskId),
+          ])
+            .then(([page, decisions]) => {
+              setHistory((previous) =>
+                dedupeActivity([
+                  ...previous,
+                  ...page.items,
+                  ...taskActivity(t),
+                ]),
+              );
+              if (!historyLoadedOlder.current) {
+                setHistoryBefore(page.items.at(-1)?.occurred_at ?? null);
+              }
+              setHistoryHasMore(page.has_more);
+              setApprovals(decisions);
+              slowRefreshAt.current = Date.now();
+            })
+            .catch((e: unknown) => {
+              setError(
+                e instanceof Error
+                  ? e.message
+                  : 'Could not refresh task activity.',
+              );
+            })
+            .finally(() => {
+              slowRefreshLoading.current = false;
+            });
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Could not load task.');
+      } finally {
+        coreLoading.current = false;
       }
-      setError('');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load task.');
-    } finally {
-      setLoading(false);
-    }
-  }, [user, taskId]);
+    },
+    [user, taskId],
+  );
   useEffect(() => {
     void load();
     const timer = window.setInterval(
-      () => void load(),
+      () => {
+        if (document.visibilityState === 'visible') void load();
+      },
       executionActive ? 5_000 : 12_000,
     );
     return () => window.clearInterval(timer);
   }, [load, executionActive]);
+  async function loadOlderHistory() {
+    if (!historyBefore || historyLoadingMore) return;
+    setHistoryLoadingMore(true);
+    try {
+      const page = await listTaskHistory(user, taskId, historyBefore);
+      setHistory((previous) => dedupeActivity([...previous, ...page.items]));
+      setHistoryBefore(page.items.at(-1)?.occurred_at ?? null);
+      setHistoryHasMore(page.has_more);
+      historyLoadedOlder.current = true;
+    } catch (e) {
+      toast(
+        'error',
+        e instanceof Error ? e.message : 'Could not load older activity.',
+      );
+    } finally {
+      setHistoryLoadingMore(false);
+    }
+  }
   async function showPatch(executionId: string) {
     setPatchPreviewTarget(executionId);
     setPatchPreviewLoading(true);
@@ -1275,10 +1366,10 @@ function TaskDetail() {
                   ? 'GitHub pull request status synchronized.'
                   : 'Pull request request recorded.',
       );
-      await load();
+      await load(true);
     } catch (e) {
       toast('error', e instanceof Error ? e.message : 'Action failed.');
-      await load();
+      await load(true);
     } finally {
       setBusy(false);
     }
@@ -1301,10 +1392,10 @@ function TaskDetail() {
           ? 'Approval recorded. PR publication will continue.'
           : 'Rejection recorded for this patch.',
       );
-      await load();
+      await load(true);
     } catch (e) {
       toast('error', e instanceof Error ? e.message : 'Decision failed.');
-      await load();
+      await load(true);
     } finally {
       setBusy(false);
     }
@@ -1330,13 +1421,13 @@ function TaskDetail() {
           ? 'Guidance saved. The coding workflow is resuming in its existing workspace.'
           : 'Guidance saved. A fresh execution is starting with the saved guidance.';
       toast('success', message);
-      await load();
+      await load(true);
     } catch (e) {
       toast(
         'error',
         e instanceof Error ? e.message : 'Could not submit guidance.',
       );
-      await load();
+      await load(true);
     } finally {
       setBusy(false);
     }
@@ -1372,7 +1463,7 @@ function TaskDetail() {
       } else {
         toast('success', 'Plan updated.');
       }
-      await load();
+      await load(true);
     } catch (e) {
       toast(
         'error',
@@ -1424,7 +1515,7 @@ function TaskDetail() {
       setPendingRisk(null);
       setRiskReason('');
       toast('success', 'Task risk and execution mode updated.');
-      await load();
+      await load(true);
     } catch (e) {
       toast(
         'error',
@@ -1440,7 +1531,7 @@ function TaskDetail() {
     try {
       await uploadTaskAttachments(user, task.id, files);
       toast('success', 'Attachments saved for the coding harness.');
-      await load();
+      await load(true);
     } catch (e) {
       toast(
         'error',
@@ -1455,7 +1546,7 @@ function TaskDetail() {
     setAttachmentBusy(true);
     try {
       await deleteTaskAttachment(user, task.id, attachmentId);
-      await load();
+      await load(true);
       toast('success', 'Attachment removed.');
     } catch (e) {
       toast(
@@ -2334,7 +2425,9 @@ function TaskDetail() {
                               {cmd.error}
                             </p>
                           )}
-                          {(cmd.command || cmd.stdout_excerpt || cmd.stderr_excerpt) && (
+                          {(cmd.command ||
+                            cmd.stdout_excerpt ||
+                            cmd.stderr_excerpt) && (
                             <details className="mt-2 text-xs text-muted">
                               <summary className="cursor-pointer">
                                 Command output
@@ -2641,6 +2734,16 @@ function TaskDetail() {
             </div>
             <div className="mt-4">
               <ActivityList events={dedupeActivity(history)} />
+              {historyHasMore && (
+                <Button
+                  className="mt-4"
+                  loading={historyLoadingMore}
+                  variant="secondary"
+                  onClick={() => void loadOlderHistory()}
+                >
+                  Load older activity
+                </Button>
+              )}
             </div>
           </Panel>
           <Panel className="p-5">

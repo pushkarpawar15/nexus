@@ -57,22 +57,31 @@ def _validation_evidence(report) -> list[dict[str, object]]:
 
 def _validation_feedback(report) -> str:
     failures = [command for command in report.commands if command.status.value != "PASSED"]
+    if not failures:
+        return redact_credentials(f"Validation failed: {report.summary}")[:12_000]
+
     sections = [f"Validation failed: {report.summary}"]
+    # Reserve a fair share for every failed command so a long first log cannot hide
+    # diagnostics from later checks from the repair attempt.
+    remaining = 12_000 - len(sections[0]) - 2
+    per_command = max(128, remaining // len(failures))
     for command in failures:
-        sections.append(
-            "\n".join(
-                part
-                for part in (
-                    f"Command {command.command_id}: {command.status.value} "
-                    f"(exit code {command.exit_code}).",
-                    f"Ran: {command.command}" if command.command else "",
-                    f"Error: {command.error}" if command.error else "",
-                    f"stderr:\n{command.stderr_excerpt}" if command.stderr_excerpt else "",
-                    f"stdout:\n{command.stdout_excerpt}" if command.stdout_excerpt else "",
-                )
-                if part
-            )
+        header = (
+            f"Command {command.command_id}: {command.status.value} (exit code {command.exit_code})."
         )
+        details = [header]
+        text_budget = max(24, (per_command - len(header) - 48) // 3)
+        if command.error:
+            details.append(f"Error: {command.error[:text_budget]}")
+        if command.command:
+            details.append(f"Ran: {command.command[:text_budget]}")
+        output_budget = max(0, per_command - sum(len(part) for part in details) - 24)
+        each_output = output_budget // 2
+        if each_output > 0 and command.stderr_excerpt:
+            details.append(f"stderr:\n{command.stderr_excerpt[-each_output:]}")
+        if each_output > 0 and command.stdout_excerpt:
+            details.append(f"stdout:\n{command.stdout_excerpt[-each_output:]}")
+        sections.append("\n".join(details)[:per_command])
     return redact_credentials("\n\n".join(sections))[:12_000]
 
 
@@ -554,8 +563,7 @@ class ExecutionPipeline:
                     )
                 stage = "security repair coding"
                 repair_options = dict(edit_options)
-                if isinstance(self.coder, CodingAgent):
-                    repair_options["previous_error"] = repair_feedback
+                repair_options["previous_error"] = repair_feedback
                 changed_files, fingerprint, patch_summary = await self.coder.edit(
                     task, workspace, **repair_options
                 )
@@ -926,8 +934,7 @@ class ExecutionPipeline:
                     "\n\nOperator guidance: " + human_answer
                 )
                 repair_options = dict(edit_options)
-                if isinstance(self.coder, CodingAgent):
-                    repair_options["previous_error"] = repair_feedback
+                repair_options["previous_error"] = repair_feedback
                 changed_files, fingerprint, patch_summary = await self.coder.edit(
                     task, workspace, **repair_options
                 )
@@ -980,8 +987,7 @@ class ExecutionPipeline:
                 },
             )
             repair_options = dict(edit_options)
-            if isinstance(self.coder, CodingAgent):
-                repair_options["previous_error"] = repair_feedback
+            repair_options["previous_error"] = repair_feedback
             changed_files, fingerprint, patch_summary = await self.coder.edit(
                 task, workspace, **repair_options
             )

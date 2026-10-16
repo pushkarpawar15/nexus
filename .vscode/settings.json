@@ -1,0 +1,6 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "backend/.venv/bin/python": true,
+        "gcloud": true
+    }
+}

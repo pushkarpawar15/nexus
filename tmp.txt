@@ -1,0 +1,29 @@
+gcloud auth application-default login
+
+python3 - <<'PY'
+import firebase_admin
+from firebase_admin import auth
+
+PROJECT_ID = "nexus-265f0"
+EMAIL = "pushkarpawar2002@gmail.com"
+
+app = firebase_admin.initialize_app(options={"projectId": PROJECT_ID})
+user = auth.get_user_by_email(EMAIL)
+
+claims = user.custom_claims or {}
+claims["nexus_role"] = "admin"
+auth.set_custom_user_claims(user.uid, claims)
+
+print(f"Granted admin to {EMAIL} (UID: {user.uid})")
+PY
+
+
+# Run from the NEXUS repository root.
+# Replace the four values below with your GCP project, Firebase Hosting site,
+# and connected GitHub repository. Keep this terminal open for the whole setup.
+
+export PROJECT_ID="nexus-265f0"
+export REGION="asia-south1"
+export FRONTEND_URL="https://nexus-265f0.web.app"
+export OWNER="pushkarpawar15"
+export REPO="payflow"

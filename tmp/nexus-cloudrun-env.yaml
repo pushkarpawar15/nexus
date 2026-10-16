@@ -1,0 +1,22 @@
+NEXUS_ENV: "production"
+NEXUS_STORAGE: "firestore"
+GOOGLE_CLOUD_PROJECT: "nexus-265f0"
+FIREBASE_PROJECT_ID: "nexus-265f0"
+FIRESTORE_DATABASE: "(default)"
+
+# Gemini model access uses Vertex AI through the Cloud Run service account.
+GOOGLE_CLOUD_LOCATION: "global"
+GEMINI_MODEL: "gemini-3.8-flash"
+
+# Replace these with your Firebase Hosting domains.
+CORS_ORIGINS: "https://nexus-265f0.web.app,https://nexus-265f0.firebaseapp.com"
+FRONTEND_URL: "https://nexus-265f0.web.app/"
+
+ATTACHMENTS_BUCKET: "nexus-265f0-nexus-attachments"
+NEXUS_PAY_REPOSITORY_KEY: "nexus_pay"
+APPROVED_REPOSITORIES: '{"nexus_pay":{"owner":"YOUR_GITHUB_OWNER","repo":"YOUR_REPO","label":"NEXUS repository","base_branch":"main"}}'
+
+# Keep hosted coding and validation disabled.
+NEXUS_CODING_ENABLED: "false"
+NEXUS_VALIDATION_ENABLED: "false"
+NEXUS_AI_PERMISSIONS: ""

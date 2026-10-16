@@ -11,6 +11,7 @@ from google.antigravity.hooks.policy import enforce
 from app.core.config import Settings
 from app.integrations import validation_runner
 from app.integrations.validation_runner import (
+    AgentPreparationPlan,
     AgentValidationCheck,
     AgentValidationOutput,
     AntigravityValidationRunner,
@@ -71,12 +72,16 @@ def run_with_output(
     async def ask(_task, _execution, _workspace, **_kwargs):
         return output, tool_results or []
 
+    async def discover(_task, _execution, _workspace):
+        return AgentPreparationPlan(summary="Test project discovery", projects=[])
+
     runner._ask_antigravity = ask
+    runner._discover_project_setups = discover
     fingerprint = compute_patch_fingerprint(workspace)
     execution.patch_fingerprint = fingerprint
     original_prepare = validation_runner._prepare_locked_npm_dependencies
 
-    async def prepare(_workspace):
+    async def prepare(_workspace, **_kwargs):
         return dependency_setup or []
 
     validation_runner._prepare_locked_npm_dependencies = prepare
