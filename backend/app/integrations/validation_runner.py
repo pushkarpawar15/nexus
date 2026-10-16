@@ -12,6 +12,7 @@ import signal
 import site
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import tomllib
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+import pydantic as pydantic_runtime
 from pydantic import Field, model_validator
 
 from app.core.config import Settings
@@ -228,6 +230,8 @@ async def _run_isolated_antigravity_call(
             [
                 *sys.path,
                 *site.getsitepackages(),
+                *(path for path in sysconfig.get_paths().values() if path and os.path.isdir(path)),
+                os.path.dirname(os.path.dirname(pydantic_runtime.__file__)),
                 *(
                     [site.getusersitepackages()]
                     if isinstance(site.getusersitepackages(), str)
