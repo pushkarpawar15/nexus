@@ -55,6 +55,7 @@ import {
   createPullRequest,
   syncPullRequest,
   cloneTaskPlan,
+  deleteTask,
   decideApproval,
   getPullRequest,
   getPullRequestEligibility,
@@ -1557,6 +1558,23 @@ function TaskDetail() {
       setAttachmentBusy(false);
     }
   }
+  async function removeTask() {
+    if (
+      !task ||
+      !window.confirm(`Delete "${task.title}"? This cannot be undone.`)
+    )
+      return;
+    setBusy(true);
+    try {
+      await deleteTask(user, task.id);
+      toast('success', 'Task deleted.');
+      navigate('/tasks');
+    } catch (e) {
+      toast('error', e instanceof Error ? e.message : 'Could not delete task.');
+    } finally {
+      setBusy(false);
+    }
+  }
   async function saveAttachment(attachmentId: string, filename: string) {
     if (!task) return;
     try {
@@ -1637,6 +1655,9 @@ function TaskDetail() {
       description: 'Recommended model for analysis and coding tasks.',
     },
   ];
+  const availableCodingModels = availableModels.filter(
+    (model) => !task.attachments.length || model.supports_attachments !== false,
+  );
   return (
     <>
       <Link to="/tasks" className="mb-5 inline-block text-sm text-mint">
@@ -1702,7 +1723,7 @@ function TaskDetail() {
                 disabled={busy || role === 'viewer'}
                 onChange={(event) => setCodingModel(event.target.value)}
               >
-                {availableModels.map((model) => (
+                {availableCodingModels.map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.label}
                     {model.id === modelChoices?.coding_default
@@ -1754,6 +1775,18 @@ function TaskDetail() {
             <Button loading={busy} onClick={() => void action('pr')}>
               <GitPullRequest size={16} />
               Create pull request
+            </Button>
+          )}
+          {task.status === 'BACKLOG' &&
+            (role === 'operator' || role === 'admin') && (
+            <Button
+              loading={busy}
+              variant="secondary"
+              className="text-rose-300 hover:border-rose-400/50 hover:bg-rose-950/30"
+              onClick={() => void removeTask()}
+            >
+              <Trash2 size={15} />
+              Delete task
             </Button>
           )}
         </div>

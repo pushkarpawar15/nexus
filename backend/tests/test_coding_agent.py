@@ -189,13 +189,22 @@ def test_coding_model_fallbacks_only_move_to_lower_cost_options() -> None:
         "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
     ]
     assert _coding_model_fallbacks("gemini-3.6-flash") == [
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
     ]
     assert _coding_model_fallbacks("gemini-3.5-flash-lite") == [
         "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+    ]
+    assert _coding_model_fallbacks("qwen/qwen3-coder-480b-a35b-instruct-maas") == [
+        "qwen/qwen3-coder-480b-a35b-instruct-maas",
+    ]
+    assert _coding_model_fallbacks("gemini-3.1-pro-preview") == [
+        "gemini-3.1-pro-preview",
     ]
 
 

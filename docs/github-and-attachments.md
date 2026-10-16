@@ -70,11 +70,15 @@ Local development stores files under `ATTACHMENTS_ROOT`. Production requires a p
 ## 5. Enable local model and worker stages
 
 Analysis and coding model choices are available on each task. The recommended default for both is
-`gemini-3.8-flash`; `gemini-3.6-flash` and `gemini-3.5-flash-lite` are also selectable. Analysis
-uses the configured Gemini provider. Coding uses Vertex AI with Application Default Credentials,
+`gemini-3.8-flash`. Selectable Gemini options include Gemini 3.1 Pro (preview), 3.6 Flash,
+3.5 Flash, 3.5 Flash-Lite, and 3.1 Flash-Lite. Vertex AI MaaS also provides Qwen3 Coder and
+DeepSeek V3.2 as open-model choices. These open models use Vertex AI with Application Default
+Credentials and do not support task attachments, so they are hidden from the coding selector when
+attachments are present. Analysis uses the configured Gemini provider. Coding uses Vertex AI with Application Default Credentials,
 `GOOGLE_CLOUD_PROJECT`, and `CODING_MODEL_LOCATION` (default `global`); it does not use
 `GEMINI_API_KEY`. The Cloud Run service identity needs `roles/aiplatform.user` and the Vertex AI API
-enabled in the project.
+enabled in the project. Open-model requests use Vertex AI's global endpoint and require the
+Agent Platform API plus access to the selected MaaS model in the project.
 
 When GCP billing is unavailable, get a Gemini API key from Google AI Studio and keep it in the backend `.env`:
 

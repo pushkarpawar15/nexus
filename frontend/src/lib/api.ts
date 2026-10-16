@@ -226,6 +226,8 @@ export async function listAllTasks(u: User | null): Promise<Task[]> {
 }
 export const getTask = (u: User | null, taskId: string) =>
   request<Task>(u, `/api/tasks/${id(taskId)}`);
+export const deleteTask = (u: User | null, taskId: string) =>
+  request<void>(u, `/api/tasks/${id(taskId)}`, { method: 'DELETE' });
 export const createTask = (
   u: User | null,
   body: {

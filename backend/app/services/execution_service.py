@@ -15,7 +15,7 @@ from app.policies.workforce import WorkforcePolicy
 from app.repositories.records import WorkflowRepositories
 from app.repositories.tasks import TaskRepository
 from app.schemas.execution import ActivityEvent, ActivitySource, ExecutionRecord, ExecutionStatus
-from app.services.model_catalog import validate_model_id
+from app.services.model_catalog import model_supports_attachments, validate_model_id
 from app.services.workflow_service import WorkflowService
 
 
@@ -30,10 +30,14 @@ class ExecutionService:
         self.settings, self.tasks, self.records = settings, tasks, records
         self.dispatcher = dispatcher
 
-    async def start(
-        self, task: Task, actor: str, model_id: str | None = None
-    ) -> ExecutionRecord:
+    async def start(self, task: Task, actor: str, model_id: str | None = None) -> ExecutionRecord:
         model_id = validate_model_id(model_id, self.settings.gemini_coding_model)
+        if task.attachments and not model_supports_attachments(model_id):
+            raise NexusError(
+                ErrorCode.HTTP_ERROR,
+                "The selected coding model does not support task attachments.",
+                status_code=422,
+            )
         if (
             self.dispatcher is None
             or not self.settings.coding_enabled
@@ -147,9 +151,7 @@ class ExecutionService:
             return blocked
         return record
 
-    async def retry(
-        self, task: Task, actor: str, model_id: str | None = None
-    ) -> ExecutionRecord:
+    async def retry(self, task: Task, actor: str, model_id: str | None = None) -> ExecutionRecord:
         interrupted_statuses = {
             TaskStatus.IN_PROGRESS,
             TaskStatus.VALIDATING,
@@ -221,9 +223,9 @@ class ExecutionService:
                 status_code=409,
             )
         safe_answer = redact_credentials(answer.strip())
-        guidance = "\n\n".join(
-            value for value in (task.human_guidance, safe_answer) if value
-        )[-8000:]
+        guidance = "\n\n".join(value for value in (task.human_guidance, safe_answer) if value)[
+            -8000:
+        ]
         saved_guidance = task.model_copy(
             update={"human_guidance": guidance, "updated_at": datetime.now(timezone.utc)}
         )

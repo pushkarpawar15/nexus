@@ -22,7 +22,7 @@ from app.models.task import Task
 from app.schemas.base import StrictModel
 from app.schemas.skills import SkillRecord
 from app.services.coding_workspace import CodingWorkspace
-from app.services.model_catalog import MODEL_OPTIONS
+from app.services.model_catalog import CODING_FALLBACK_MODEL_IDS, is_open_model
 
 MAX_CONTEXT_FILES = 12
 MAX_CONTEXT_BYTES = 64 * 1024
@@ -120,13 +120,17 @@ class GeminiCodingAgent:
     ) -> CodeProposal:
         if not self.settings.google_cloud_project:
             raise RuntimeError("GOOGLE_CLOUD_PROJECT is required for Vertex AI coding.")
+        if is_open_model(model_id) and attachments:
+            raise ValueError("Vertex open models do not support coding task attachments.")
         if self.client is None:
             from google import genai
 
             self.client = genai.Client(
                 vertexai=True,
                 project=self.settings.google_cloud_project,
-                location=self.settings.coding_model_location,
+                location=(
+                    "global" if is_open_model(model_id) else self.settings.coding_model_location
+                ),
             )
         from google.genai import types
 
@@ -167,6 +171,12 @@ class GeminiCodingAgent:
             ),
         }
         content: list[object] = [json.dumps(prompt)]
+        response_schema = gemini_response_json_schema(CodeProposal)
+        if is_open_model(model_id):
+            content.append(
+                "Your response must exactly match this JSON schema; do not add extra properties:\n"
+                + json.dumps(response_schema)
+            )
         for _filename, content_type, data in attachments or []:
             content.append(types.Part.from_bytes(data=data, mime_type=content_type))
         response = await asyncio.wait_for(
@@ -175,7 +185,7 @@ class GeminiCodingAgent:
                 contents=content,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_json_schema=gemini_response_json_schema(CodeProposal),
+                    response_json_schema=response_schema,
                 ),
             ),
             timeout=self.settings.coding_model_timeout_seconds,
@@ -491,7 +501,7 @@ def _provider_quota_error(error: Exception) -> bool:
 
 
 def _coding_model_fallbacks(model_id: str) -> list[str]:
-    model_ids = [option["id"] for option in MODEL_OPTIONS]
+    model_ids = list(CODING_FALLBACK_MODEL_IDS)
     try:
         index = model_ids.index(model_id)
     except ValueError:
@@ -759,13 +769,29 @@ class CodingAgent:
         attempt: int,
         skills: list[SkillRecord] | None = None,
     ) -> tuple[CodeProposal, str | None]:
+        selected_model = model_id or self.settings.gemini_coding_model
+        if is_open_model(selected_model):
+            direct_model = (
+                self.model
+                if isinstance(self.model, GeminiCodingAgent)
+                else GeminiCodingAgent(self.settings)
+            )
+            proposal = await direct_model.propose(
+                task,
+                context,
+                paths,
+                previous_error,
+                attachments=attachments,
+                model_id=selected_model,
+                skills=skills,
+            )
+            return proposal, selected_model
         if not isinstance(self.model, (GeminiCodingAgent, AntigravityCodingAgent)):
             proposal = await self.model.propose(
                 task, context, paths, previous_error, attachments=attachments
             )
             return proposal, model_id
 
-        selected_model = model_id or self.settings.gemini_coding_model
         candidates = _coding_model_fallbacks(selected_model)
         for index, candidate in enumerate(candidates):
             try:

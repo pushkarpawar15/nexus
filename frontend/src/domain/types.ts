@@ -142,6 +142,8 @@ export interface ModelOption {
   id: string;
   label: string;
   description: string;
+  provider?: string;
+  supports_attachments?: boolean;
 }
 export interface ModelChoices {
   analysis_default: string;
