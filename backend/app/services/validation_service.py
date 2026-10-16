@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 from app.core.config import Settings
@@ -12,7 +13,23 @@ from app.integrations.validation_runner import (
 from app.models.task import Task, TaskStatus
 from app.repositories.records import WorkflowRepositories
 from app.schemas.execution import ExecutionRecord, ExecutionStatus
-from app.schemas.validation import ValidationReport, ValidationStatus
+from app.schemas.validation import (
+    ValidationCommandStatus,
+    ValidationReport,
+    ValidationStatus,
+)
+
+logger = logging.getLogger(__name__)
+TRANSIENT_VALIDATION_RETRY_DELAY_SECONDS = 0.5
+
+
+def _is_transient_antigravity_unavailable(report: ValidationReport) -> bool:
+    return (
+        report.overall_status == ValidationStatus.BLOCKED
+        and len(report.commands) == 1
+        and report.commands[0].command_id == "antigravity_validation"
+        and report.commands[0].status == ValidationCommandStatus.UNAVAILABLE
+    )
 
 
 class ValidationService:
@@ -47,13 +64,34 @@ class ValidationService:
         begin = getattr(self.runner, "begin_execution", None)
         if begin is not None:
             begin(execution.id)
-        report = await asyncio.to_thread(
-            self.runner.run,
-            task,
-            execution,
-            workspace,
-            expected_fingerprint=execution.patch_fingerprint,
-        )
+        retried = False
+        for attempt in range(2):
+            report = await asyncio.to_thread(
+                self.runner.run,
+                task,
+                execution,
+                workspace,
+                expected_fingerprint=execution.patch_fingerprint,
+            )
+            if attempt == 0 and _is_transient_antigravity_unavailable(report):
+                retried = True
+                logger.warning(
+                    "Retrying unavailable Antigravity validation once (execution_id=%s): %s",
+                    execution.id,
+                    report.summary[:500],
+                )
+                await asyncio.sleep(TRANSIENT_VALIDATION_RETRY_DELAY_SECONDS)
+                continue
+            break
+        if retried:
+            report = report.model_copy(
+                update={
+                    "summary": (
+                        "Validation was retried once after an Antigravity worker error. "
+                        + report.summary
+                    )[:2000]
+                }
+            )
         await self.records.validation_reports.create(report)
         if report.overall_status == ValidationStatus.PASSED:
             if compute_patch_fingerprint(workspace) != execution.patch_fingerprint:

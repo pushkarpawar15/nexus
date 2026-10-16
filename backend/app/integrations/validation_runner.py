@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import json
 import multiprocessing
 import os
+import pickle
 import re
 import shlex
 import signal
+import site
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from pydantic import Field, model_validator
 
 from app.core.config import Settings
 from app.core.logging import redact_credentials
+from app.isolated_process import run_serialized_callable
 from app.models.task import Task
 from app.schemas.base import StrictModel
 from app.schemas.execution import ExecutionRecord
@@ -210,23 +212,6 @@ async def _request_validation_output(agent, prompt: str) -> tuple[AgentValidatio
     return output, chunks
 
 
-def _antigravity_process_entry(connection, target, args, kwargs) -> None:
-    """Run an Antigravity call in its own process group so hangs can be killed."""
-    try:
-        os.setsid()
-        result = target(*args, **kwargs)
-        if inspect.isawaitable(result):
-            result = asyncio.run(result)
-        connection.send(("ok", result))
-    except BaseException as exc:
-        try:
-            connection.send(("error", type(exc).__name__, str(exc)))
-        except (BrokenPipeError, EOFError, OSError):
-            pass
-    finally:
-        connection.close()
-
-
 async def _run_isolated_antigravity_call(
     target,
     *args,
@@ -237,9 +222,23 @@ async def _run_isolated_antigravity_call(
     """Bound SDK startup, model work, and cleanup; kill localharness on timeout."""
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(duplex=False)
+    payload = pickle.dumps((target, args, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
+    module_search_paths = list(
+        dict.fromkeys(
+            [
+                *sys.path,
+                *site.getsitepackages(),
+                *(
+                    [site.getusersitepackages()]
+                    if isinstance(site.getusersitepackages(), str)
+                    else []
+                ),
+            ]
+        )
+    )
     process = context.Process(
-        target=_antigravity_process_entry,
-        args=(sender, target, args, kwargs),
+        target=run_serialized_callable,
+        args=(sender, payload, module_search_paths),
         name=f"nexus-antigravity-{stage.replace(' ', '-')}",
     )
     try:

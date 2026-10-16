@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,6 +70,40 @@ def _hang_in_antigravity_worker() -> None:
 
 def _exit_without_antigravity_result() -> None:
     os._exit(17)
+
+
+def _return_agent_validation_output() -> AgentValidationOutput:
+    return AgentValidationOutput(
+        outcome="NO_CHECKS", summary="No checks were applicable.", checks=[]
+    )
+
+
+def test_isolated_worker_restores_installed_module_paths() -> None:
+    async def run() -> None:
+        result = await _run_isolated_antigravity_call(
+            _return_agent_validation_output,
+            timeout_seconds=5,
+            stage="project discovery",
+        )
+        assert result.outcome == "NO_CHECKS"
+        assert result.checks == []
+
+    asyncio.run(run())
+
+
+def test_isolated_worker_bootstraps_when_parent_site_paths_are_missing() -> None:
+    probe = Path(__file__).parent / "support" / "spawn_bootstrap_probe.py"
+    result = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pydantic=" in result.stdout
 
 
 def test_missing_antigravity_structured_output_retries_once() -> None:

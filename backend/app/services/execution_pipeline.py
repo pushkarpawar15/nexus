@@ -901,6 +901,9 @@ class ExecutionPipeline:
                 return execution, validation, repair_round
             if validation.overall_status == ValidationStatus.SKIPPED:
                 return execution, validation, repair_round
+            if validation.overall_status == ValidationStatus.BLOCKED:
+                await self._finish_blocked_validation(task, execution, validation)
+                return None
 
             can_repair = (
                 validation.overall_status == ValidationStatus.FAILED
@@ -1049,6 +1052,32 @@ class ExecutionPipeline:
             execution, ExecutionStatus.BLOCKED, reason, "VALIDATION_SKIPPED"
         )
         return True
+
+    async def _finish_blocked_validation(self, task, execution, validation) -> None:
+        reason = validation.summary
+        await self._event(
+            task.id,
+            execution.id,
+            "validation.system_blocked",
+            reason,
+            {"commands": _validation_evidence(validation)},
+        )
+        current = await self.tasks.get(task.id)
+        if current and current.status == TaskStatus.VALIDATING:
+            await WorkflowService(self.tasks).transition(
+                current,
+                TaskStatus.BLOCKED,
+                actor="validator",
+                reason=reason,
+                evidence=TransitionEvidence(
+                    kind=TransitionEvidenceKind.VALIDATION,
+                    reference=validation.id,
+                ),
+                trusted=True,
+            )
+        await self._finish_execution(
+            execution, ExecutionStatus.BLOCKED, reason, "VALIDATION_BLOCKED"
+        )
 
     async def stop_active_processes(self, execution_id: str) -> None:
         workspace_stop = self._workspace_stop_events.get(execution_id)
