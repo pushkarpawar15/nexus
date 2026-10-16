@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Annotated
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
 
-from app.models.task import Complexity, ExecutionMode, RiskLevel, TaskStatus, TaskType
+from app.models.task import (
+    Complexity,
+    ExecutionMode,
+    RiskLevel,
+    TaskPriority,
+    TaskStatus,
+    TaskType,
+)
 from app.schemas.base import StrictModel
 
 _REPOSITORY_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,149}$")
@@ -22,6 +30,22 @@ class CreateTaskRequest(StrictModel):
     description: Annotated[str, StringConstraints(min_length=1, max_length=20_000)]
     repository_key: Annotated[str, StringConstraints(min_length=1, max_length=150)]
     task_type: TaskType = TaskType.OTHER
+    assignee: Annotated[str, StringConstraints(min_length=1, max_length=200)] | None = None
+    priority: TaskPriority = TaskPriority.NORMAL
+    due_date: date | None = None
+    labels: list[Annotated[str, StringConstraints(min_length=1, max_length=50)]] = Field(
+        default_factory=list, max_length=20
+    )
+
+    @field_validator("labels", mode="before")
+    @classmethod
+    def normalize_labels(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        normalized = [item.strip() if isinstance(item, str) else item for item in value]
+        if any(item == "" for item in normalized):
+            raise ValueError("labels must not contain blank items")
+        return normalized
 
     @model_validator(mode="after")
     def validate_nonblank_fields(self) -> CreateTaskRequest:
@@ -38,6 +62,22 @@ class UpdateTaskRequest(StrictModel):
     description: Annotated[str, StringConstraints(min_length=1, max_length=20_000)] | None = None
     repository_key: Annotated[str, StringConstraints(min_length=1, max_length=150)] | None = None
     task_type: TaskType | None = None
+    assignee: Annotated[str, StringConstraints(min_length=1, max_length=200)] | None = None
+    priority: TaskPriority | None = None
+    due_date: date | None = None
+    labels: list[Annotated[str, StringConstraints(min_length=1, max_length=50)]] | None = Field(
+        default=None, max_length=20
+    )
+
+    @field_validator("labels", mode="before")
+    @classmethod
+    def normalize_labels(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        normalized = [item.strip() if isinstance(item, str) else item for item in value]
+        if any(item == "" for item in normalized):
+            raise ValueError("labels must not contain blank items")
+        return normalized
 
     @model_validator(mode="after")
     def validate_partial_update(self) -> UpdateTaskRequest:
@@ -45,12 +85,14 @@ class UpdateTaskRequest(StrictModel):
             raise ValueError("at least one editable field is required")
         for field_name in self.model_fields_set:
             value = getattr(self, field_name)
-            if value is None:
+            if value is None and field_name not in {"assignee", "due_date"}:
                 raise ValueError(f"{field_name} must not be null")
             if isinstance(value, str) and not value:
                 raise ValueError(f"{field_name} must not be blank")
         if "repository_key" in self.model_fields_set:
             _validate_repository_key(self.repository_key or "")
+        if self.labels is not None and any(not label.strip() for label in self.labels):
+            raise ValueError("labels must not contain blank items")
         return self
 
 

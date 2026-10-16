@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Annotated
 from uuid import uuid4
@@ -62,6 +62,13 @@ class TaskType(StringEnum):
     SECURITY = "SECURITY"
     INFRASTRUCTURE = "INFRASTRUCTURE"
     OTHER = "OTHER"
+
+
+class TaskPriority(StringEnum):
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
+    URGENT = "URGENT"
 
 
 class TransitionEvidenceKind(StringEnum):
@@ -139,6 +146,12 @@ class Task(UtcTimestampModel):
     repository_key: Annotated[str, StringConstraints(min_length=1, max_length=150)]
     repository_label: Annotated[str, StringConstraints(min_length=1, max_length=200)] | None = None
     task_type: TaskType = TaskType.OTHER
+    assignee: Annotated[str, StringConstraints(min_length=1, max_length=200)] | None = None
+    priority: TaskPriority = TaskPriority.NORMAL
+    due_date: date | None = None
+    labels: list[Annotated[str, StringConstraints(min_length=1, max_length=50)]] = Field(
+        default_factory=list, max_length=20
+    )
     status: TaskStatus = TaskStatus.BACKLOG
     risk: RiskLevel | None = None
     complexity: Complexity | None = None
@@ -175,6 +188,7 @@ __all__ = [
     "Task",
     "TaskAttachment",
     "TaskPage",
+    "TaskPriority",
     "TaskStatus",
     "TaskType",
     "TransitionEvidence",

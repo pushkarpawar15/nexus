@@ -825,6 +825,10 @@ def create_app(
             repository_key=request.repository_key,
             repository_label=(target.label or f"{target.owner}/{target.repo}"),
             task_type=request.task_type,
+            assignee=request.assignee,
+            priority=request.priority,
+            due_date=request.due_date,
+            labels=request.labels,
             status=TaskStatus.BACKLOG,
             created_at=now,
             updated_at=now,
@@ -859,10 +863,11 @@ def create_app(
         task_id: str, request: UpdateTaskRequest, user: UserIdentity = Depends(require_operator)
     ) -> Task:
         task = await get_task_or_404(task_id, user)
-        if task.status != TaskStatus.BACKLOG:
+        editable_fields = {"title", "description", "repository_key", "task_type"}
+        if task.status != TaskStatus.BACKLOG and request.model_fields_set & editable_fields:
             raise NexusError(
                 ErrorCode.TASK_CONFLICT,
-                "Only untouched BACKLOG tasks can be edited.",
+                "Only task metadata can be edited after work starts.",
                 status_code=409,
             )
         if request.repository_key and request.repository_key not in await repository_keys_for_user(
