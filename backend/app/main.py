@@ -914,10 +914,10 @@ def create_app(
     @app.delete("/api/tasks/{task_id}", status_code=204)
     async def delete_task(task_id: str, user: UserIdentity = Depends(require_operator)) -> None:
         task = await get_task_or_404(task_id, user)
-        if task.status != TaskStatus.BACKLOG:
+        if task.status not in {TaskStatus.BACKLOG, TaskStatus.FAILED}:
             raise NexusError(
                 ErrorCode.DELETION_NOT_ALLOWED,
-                "Only BACKLOG tasks can be deleted.",
+                "Only BACKLOG or FAILED tasks can be deleted.",
                 status_code=409,
             )
         try:

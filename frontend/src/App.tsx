@@ -1777,18 +1777,18 @@ function TaskDetail() {
               Create pull request
             </Button>
           )}
-          {task.status === 'BACKLOG' &&
+          {['BACKLOG', 'FAILED'].includes(task.status) &&
             (role === 'operator' || role === 'admin') && (
-            <Button
-              loading={busy}
-              variant="secondary"
-              className="text-rose-300 hover:border-rose-400/50 hover:bg-rose-950/30"
-              onClick={() => void removeTask()}
-            >
-              <Trash2 size={15} />
-              Delete task
-            </Button>
-          )}
+              <Button
+                loading={busy}
+                variant="secondary"
+                className="text-rose-300 hover:border-rose-400/50 hover:bg-rose-950/30"
+                onClick={() => void removeTask()}
+              >
+                <Trash2 size={15} />
+                Delete task
+              </Button>
+            )}
         </div>
       </div>
       {task.status === 'AWAITING_APPROVAL' && (

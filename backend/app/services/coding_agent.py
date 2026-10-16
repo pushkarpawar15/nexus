@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.util
 import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -31,25 +34,33 @@ MAX_TOTAL_CONTENT = 256 * 1024
 MAX_DIFF_BYTES = 512 * 1024
 MAX_PROPOSAL_ATTEMPTS = 3
 CODE_STYLE_INSTRUCTIONS = (
-    "Before writing changed files, inspect the available repository paths and supplied "
-    "project manifests, formatter configuration, and nearby source files to determine the "
-    "existing formatting rules for each changed file type. Return file contents already "
-    "formatted according to those repository-specific rules; do not assume a universal style "
-    "or introduce a formatter. On validation repairs, inspect the exact formatter diagnostics "
-    "and correct every reported issue in the changed files; do not return unchanged content "
-    "after a formatting failure. Keep unrelated files untouched."
+    "Do these steps in order: (1) read the task, source, manifests, formatter config, and nearby "
+    "examples; (2) make only the smallest complete change and include needed tests; (3) write "
+    "each changed file in the configured formatter's style. The host formats changed files with "
+    "installed repository tools before validation. Every text file must end with one newline. "
+    "(4) fix every diagnostic in repair_error. "
+    "For a formatting error, return corrected file contents, not an explanation or unchanged "
+    "files. Leave unrelated files untouched."
 )
 CODING_SELF_REVIEW_INSTRUCTIONS = (
-    "Before returning the file operations, perform a final source-level review of the proposed "
-    "changes against the task, execution plan, repository conventions, and every item in "
-    "repair_error. Check for missed requirements, inconsistent callers, obvious syntax or type "
-    "problems, and tests that should be updated. Correct issues you find before returning. "
-    "Do not claim that commands or tests passed; the separate repository validator runs them."
+    "Before returning, check the task and plan item by item, then check every diagnostic in "
+    "repair_error. Verify changed callers, imports, syntax, types, and relevant tests. Return "
+    "complete file contents with exact hashes for replacements/deletes. Do not claim tests or "
+    "commands passed; the repository validator runs them."
 )
 _FORMAT_CONFIG_NAMES = {
     ".clang-format",
     ".editorconfig",
     ".prettierignore",
+    ".prettierrc",
+    ".prettierrc.json",
+    ".prettierrc.js",
+    ".prettierrc.cjs",
+    ".prettierrc.yaml",
+    ".prettierrc.yml",
+    "prettier.config.js",
+    "prettier.config.cjs",
+    "prettier.config.mjs",
     ".ruff.toml",
     ".rustfmt.toml",
     ".scalafmt.conf",
@@ -63,9 +74,9 @@ _FORMAT_CONFIG_NAMES = {
     "package.json",
     "taplo.toml",
     "biome.json",
-    "biome.jsonc",
     "biome.config.js",
     "biome.config.mjs",
+    "biome.jsonc",
     "pyproject.toml",
     "ruff.toml",
     "rustfmt.toml",
@@ -304,6 +315,499 @@ class AntigravityCodingAgent:
         finally:
             for path in temporary_paths:
                 path.unlink(missing_ok=True)
+
+
+def _format_proposed_files(
+    root: Path, operations: list[FileOperation], repair_feedback: str | None = None
+) -> tuple[list[str], list[str], list[str]]:
+    """Apply known repository formatters to proposed files when their tools are available."""
+    formatted_paths: list[str] = []
+    skipped_paths: list[str] = []
+    format_errors: list[str] = []
+
+    def has_config(path: Path, markers: tuple[str, ...]) -> bool:
+        for directory in (path.parent, *path.parent.parents):
+            if not directory.is_relative_to(root):
+                break
+            for name in _FORMAT_CONFIG_NAMES:
+                config = directory / name
+                if not config.is_file():
+                    continue
+                if name == "package.json":
+                    try:
+                        package = json.loads(config.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(package, dict):
+                        continue
+                    dependencies = {
+                        **(
+                            package.get("dependencies", {})
+                            if isinstance(package.get("dependencies", {}), dict)
+                            else {}
+                        ),
+                        **(
+                            package.get("devDependencies", {})
+                            if isinstance(package.get("devDependencies", {}), dict)
+                            else {}
+                        ),
+                        **(
+                            package.get("optionalDependencies", {})
+                            if isinstance(package.get("optionalDependencies", {}), dict)
+                            else {}
+                        ),
+                    }
+                    if any(tool in dependencies for tool in ("prettier", "@biomejs/biome")):
+                        return True
+                    scripts = package.get("scripts", {})
+                    if not isinstance(scripts, dict):
+                        continue
+                    if any(
+                        name in scripts and tool in scripts[name]
+                        for name in ("format", "format:check", "lint")
+                        for tool in ("prettier", "biome")
+                    ):
+                        return True
+                    continue
+                try:
+                    content = config.read_text(encoding="utf-8", errors="ignore").lower()
+                except OSError:
+                    continue
+                if any(marker in content for marker in markers) or name in markers:
+                    return True
+        return False
+
+    def local_binary(path: Path, name: str) -> str | None:
+        for directory in (path.parent, *path.parent.parents):
+            if not directory.is_relative_to(root):
+                break
+            candidate = directory / "node_modules" / ".bin" / name
+            if candidate.is_file():
+                return str(candidate)
+            candidate = directory / ".venv" / "bin" / name
+            if candidate.is_file():
+                return str(candidate)
+        return shutil.which(name)
+
+    def formatter_environment(home: str) -> dict[str, str]:
+        return {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "HOME": home,
+            "CI": "true",
+            "PYTHONNOUSERSITE": "1",
+            "PIP_CONFIG_FILE": os.devnull,
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            "PIP_NO_INPUT": "1",
+            "PIP_INDEX_URL": "https://pypi.org/simple",
+            "npm_config_audit": "false",
+            "npm_config_fund": "false",
+            "npm_config_ignore_scripts": "true",
+            "npm_config_registry": "https://registry.npmjs.org",
+        }
+
+    def install_and_run_ruff(paths: list[str]) -> tuple[bool, str]:
+        """Use a temporary, isolated Ruff install when the worker image lacks Ruff."""
+        try:
+            project_root = root
+            file_parent = (root / paths[0]).parent
+            for directory in (file_parent, *file_parent.parents):
+                if not directory.is_relative_to(root):
+                    break
+                if any(
+                    (directory / name).is_file()
+                    for name in ("pyproject.toml", "requirements.txt", "requirements-dev.txt")
+                ):
+                    project_root = directory
+            ruff_requirement = "ruff>=0.6,<1"
+            pyproject = project_root / "pyproject.toml"
+            if pyproject.is_file():
+                config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+                project_config = config.get("project", {})
+                declared = []
+                if isinstance(project_config, dict):
+                    declared.extend(project_config.get("dependencies", []))
+                    optional = project_config.get("optional-dependencies", {})
+                    if isinstance(optional, dict):
+                        declared.extend(
+                            requirement
+                            for requirements in optional.values()
+                            if isinstance(requirements, list)
+                            for requirement in requirements
+                        )
+                groups = config.get("dependency-groups", {})
+                if isinstance(groups, dict):
+                    declared.extend(
+                        requirement
+                        for requirements in groups.values()
+                        if isinstance(requirements, list)
+                        for requirement in requirements
+                    )
+                for requirement in declared:
+                    if isinstance(requirement, str):
+                        match = re.match(r"^\s*ruff(?:\[[^]]+\])?(.*)$", requirement, re.I)
+                        if match:
+                            ruff_requirement = "ruff" + match.group(1).strip()
+                            break
+            for filename in (
+                "requirements.txt",
+                "requirements-dev.txt",
+                "dev-requirements.txt",
+                "requirements-test.txt",
+            ):
+                requirement_file = project_root / filename
+                if not requirement_file.is_file():
+                    continue
+                for line in requirement_file.read_text(encoding="utf-8").splitlines():
+                    match = re.match(r"^\s*ruff(?:\[[^]]+\])?(.*)$", line.split("#", 1)[0], re.I)
+                    if match:
+                        ruff_requirement = "ruff" + match.group(1).strip()
+                        break
+            if "@" in ruff_requirement or "/" in ruff_requirement or "\\" in ruff_requirement:
+                return False, "Ruff must be installed from the configured Python package index."
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            return False, f"Could not resolve repository Ruff version: {exc}"[:500]
+        with tempfile.TemporaryDirectory(prefix="nexus-ruff-format-") as temporary:
+            environment = formatter_environment(temporary)
+            try:
+                install = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--disable-pip-version-check",
+                        "--no-input",
+                        "--only-binary=:all:",
+                        "--index-url=https://pypi.org/simple",
+                        f"--target={temporary}",
+                        ruff_requirement,
+                    ],
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return False, str(exc)[:500]
+            if install.returncode != 0:
+                return False, redact_credentials(
+                    install.stderr or install.stdout or "Ruff installation failed"
+                )[:500]
+            environment["PYTHONPATH"] = temporary
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "ruff",
+                        "format",
+                        "--quiet",
+                        *[str(root / p) for p in paths],
+                    ],
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return False, str(exc)[:500]
+            if result.returncode != 0:
+                return False, redact_credentials(
+                    result.stderr or result.stdout or "Ruff formatting failed"
+                )[:500]
+        return True, ""
+
+    def package_manifest(path: Path) -> tuple[Path, dict] | None:
+        fallback = None
+        for directory in (path.parent, *path.parent.parents):
+            if not directory.is_relative_to(root):
+                break
+            manifest = directory / "package.json"
+            if manifest.is_file():
+                try:
+                    package = json.loads(manifest.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(package, dict):
+                    fallback = fallback or (directory, package)
+                    dependencies = {
+                        **(
+                            package.get("dependencies", {})
+                            if isinstance(package.get("dependencies", {}), dict)
+                            else {}
+                        ),
+                        **(
+                            package.get("devDependencies", {})
+                            if isinstance(package.get("devDependencies", {}), dict)
+                            else {}
+                        ),
+                        **(
+                            package.get("optionalDependencies", {})
+                            if isinstance(package.get("optionalDependencies", {}), dict)
+                            else {}
+                        ),
+                    }
+                    if any(name in dependencies for name in ("prettier", "@biomejs/biome")):
+                        return directory, package
+        return fallback
+
+    def install_locked_npm_dependencies(project: Path) -> tuple[bool, str]:
+        lockfile = project / "package-lock.json"
+        if not lockfile.is_file():
+            return False, "No package-lock.json is available for a reproducible formatter setup."
+        try:
+            from app.integrations.validation_runner import _npm_lockfile_error
+
+            lockfile_error = _npm_lockfile_error(lockfile)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return False, f"Could not validate npm lockfile: {exc}"
+        if lockfile_error:
+            return False, lockfile_error
+
+        with tempfile.TemporaryDirectory(prefix="nexus-npm-format-") as temporary:
+            cache = Path(temporary)
+            command = [
+                "npm",
+                "ci",
+                "--ignore-scripts",
+                "--no-audit",
+                "--no-fund",
+                "--registry=https://registry.npmjs.org",
+                f"--cache={cache / 'cache'}",
+                f"--userconfig={cache / 'user.npmrc'}",
+                f"--globalconfig={cache / 'global.npmrc'}",
+            ]
+            npmrc = project / ".npmrc"
+            backup: Path | None = None
+            try:
+                if npmrc.exists():
+                    if not npmrc.is_file():
+                        return False, "Project .npmrc is not a regular file."
+                    backup = project / f".nexus-npmrc-{hashlib.sha256(os.urandom(32)).hexdigest()}"
+                    npmrc.replace(backup)
+                result = subprocess.run(
+                    command,
+                    cwd=project,
+                    env=formatter_environment(temporary),
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return False, str(exc)[:500]
+            finally:
+                if backup is not None and backup.exists():
+                    backup.replace(npmrc)
+            if result.returncode != 0:
+                return False, redact_credentials(result.stderr or result.stdout or "npm ci failed")[
+                    :500
+                ]
+        return True, ""
+
+    groups: dict[str, list[str]] = {}
+    for operation in operations:
+        if operation.operation == "delete" or operation.content is None:
+            continue
+        suffix = PurePosixPath(operation.path).suffix.lower()
+        if suffix == ".py":
+            groups.setdefault("python", []).append(operation.path)
+        elif suffix in {
+            ".js",
+            ".jsx",
+            ".ts",
+            ".tsx",
+            ".json",
+            ".css",
+            ".scss",
+            ".md",
+            ".yaml",
+            ".yml",
+            ".html",
+        }:
+            groups.setdefault("web", []).append(operation.path)
+        elif suffix == ".go":
+            groups.setdefault("go", []).append(operation.path)
+        elif suffix == ".rs":
+            groups.setdefault("rust", []).append(operation.path)
+        elif suffix in {".c", ".h", ".cc", ".cpp", ".hpp"}:
+            groups.setdefault("clang", []).append(operation.path)
+
+    for language, paths in groups.items():
+        absolute_paths = [str(root / path) for path in paths]
+        commands: list[list[str]] = []
+        if language == "python":
+            black_configured = any(has_config(root / path, ("[tool.black",)) for path in paths)
+            ruff_configured = any(
+                has_config(root / path, ("[tool.ruff", "ruff.toml", ".ruff.toml")) for path in paths
+            ) or bool(re.search(r"\bruff\s+format\b", repair_feedback or "", re.IGNORECASE))
+            ruff = local_binary(root / paths[0], "ruff")
+            if ruff:
+                commands.append([ruff, "format", "--quiet", *absolute_paths])
+            elif importlib.util.find_spec("ruff"):
+                commands.append(
+                    [sys.executable, "-m", "ruff", "format", "--quiet", *absolute_paths]
+                )
+            elif ruff_configured:
+                succeeded, reason = install_and_run_ruff(paths)
+                if succeeded:
+                    formatted_paths.extend(paths)
+                else:
+                    logger.info("Could not prepare Ruff for formatting: %s", reason)
+                    skipped_paths.extend(paths)
+                    format_errors.append(f"Ruff setup or formatting failed: {reason}")
+                continue
+            elif black_configured and local_binary(root / paths[0], "black"):
+                commands.append(
+                    [local_binary(root / paths[0], "black"), "--quiet", *absolute_paths]
+                )
+            elif black_configured and importlib.util.find_spec("black"):
+                commands.append([sys.executable, "-m", "black", "--quiet", *absolute_paths])
+            else:
+                skipped_paths.extend(paths)
+        elif language == "web":
+            prepared_projects: set[Path] = set()
+            for path in paths:
+                absolute = root / path
+                manifest = package_manifest(absolute)
+                project = manifest[0] if manifest else root
+                prettier_configured = has_config(
+                    absolute, ("prettier", ".prettierrc", ".prettierrc.json")
+                )
+                biome_configured = has_config(absolute, ("biome", "biome.json", "biome.jsonc"))
+                prettier = local_binary(absolute, "prettier")
+                biome = local_binary(absolute, "biome")
+                if not prettier and not biome and project not in prepared_projects:
+                    package = manifest[1] if manifest else {}
+                    dependencies = {
+                        **(
+                            package.get("dependencies", {})
+                            if isinstance(package.get("dependencies", {}), dict)
+                            else {}
+                        ),
+                        **(
+                            package.get("devDependencies", {})
+                            if isinstance(package.get("devDependencies", {}), dict)
+                            else {}
+                        ),
+                        **(
+                            package.get("optionalDependencies", {})
+                            if isinstance(package.get("optionalDependencies", {}), dict)
+                            else {}
+                        ),
+                    }
+                    if any(name in dependencies for name in ("prettier", "@biomejs/biome")):
+                        prepared_projects.add(project)
+                        installed, reason = install_locked_npm_dependencies(project)
+                        if not installed:
+                            logger.info("Could not prepare frontend formatter: %s", reason)
+                            format_errors.append(f"Frontend formatter setup failed: {reason}")
+                        prettier = local_binary(absolute, "prettier")
+                        biome = local_binary(absolute, "biome")
+                formatter_command = None
+                if prettier_configured and prettier:
+                    formatter_command = [prettier, "--write", str(absolute)]
+                elif biome_configured and biome:
+                    formatter_command = [biome, "format", "--write", str(absolute)]
+                if formatter_command is None:
+                    skipped_paths.append(path)
+                    format_errors.append(f"No configured formatter was available for {path}.")
+                    continue
+                try:
+                    result = subprocess.run(
+                        formatter_command,
+                        cwd=project,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    logger.info("Frontend formatter failed for %s: %s", path, exc)
+                    skipped_paths.append(path)
+                    format_errors.append(f"Frontend formatter failed for {path}: {exc}")
+                    continue
+                if result.returncode == 0:
+                    formatted_paths.append(path)
+                else:
+                    detail = redact_credentials(
+                        result.stderr or result.stdout or "formatter failed"
+                    )[:500]
+                    logger.info(
+                        "Frontend formatter failed for %s: %s",
+                        path,
+                        detail,
+                    )
+                    skipped_paths.append(path)
+                    format_errors.append(f"Frontend formatter failed for {path}: {detail}")
+            continue
+        elif language == "go" and (formatter := shutil.which("gofmt")):
+            commands.append([formatter, "-w", *absolute_paths])
+        elif language == "rust" and (formatter := shutil.which("rustfmt")):
+            commands.append([formatter, *absolute_paths])
+        elif (
+            language == "clang"
+            and any(has_config(root / path, (".clang-format",)) for path in paths)
+            and (formatter := shutil.which("clang-format"))
+        ):
+            commands.append([formatter, "-i", *absolute_paths])
+        else:
+            skipped_paths.extend(paths)
+
+        if commands:
+            command = commands[0]
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                logger.info("Skipping proposed-file formatter for %s: %s", language, exc)
+                skipped_paths.extend(paths)
+                format_errors.append(f"{language} formatter could not run: {exc}")
+                continue
+            if result.returncode == 0:
+                formatted_paths.extend(paths)
+            else:
+                detail = redact_credentials(result.stderr or result.stdout or "formatter failed")[
+                    :500
+                ]
+                logger.info(
+                    "Proposed-file formatter failed for %s: %s",
+                    language,
+                    detail,
+                )
+                skipped_paths.extend(paths)
+                format_errors.append(f"{language} formatter failed: {detail}")
+
+    if skipped_paths and not format_errors:
+        format_errors.append("No matching configured formatter was available for some files.")
+    return formatted_paths, skipped_paths, format_errors
+
+
+def _ensure_final_newline(root: Path, operations: list[FileOperation]) -> list[str]:
+    """Apply the universal text-file EOF rule even when formatter setup is unavailable."""
+    adjusted: list[str] = []
+    for operation in operations:
+        if operation.operation == "delete" or operation.content is None:
+            continue
+        target = root / operation.path
+        try:
+            content = target.read_bytes()
+        except OSError:
+            continue
+        if content and not content.endswith((b"\n", b"\r")):
+            target.write_bytes(content + b"\n")
+            adjusted.append(operation.path)
+    return adjusted
 
 
 def _parse_code_proposal(output: object, context: dict[str, str]) -> CodeProposal:
@@ -862,6 +1366,11 @@ class CodingAgent:
                         "coding.model.started",
                         "The coding model is preparing a structured code proposal "
                         f"(attempt {attempt + 1} of {MAX_PROPOSAL_ATTEMPTS}).",
+                        {
+                            "attempt": attempt + 1,
+                            "repair_feedback_present": bool(error),
+                            "repair_feedback_characters": len(error or ""),
+                        },
                     )
                 proposal, active_model_id = await self._propose(
                     task,
@@ -898,47 +1407,25 @@ class CodingAgent:
                         {"repairs": operation_repairs},
                     )
                 changed = apply_proposal(workspace.path, proposal, task)
-                python_paths = [
-                    operation.path
-                    for operation in proposal.operations
-                    if operation.operation != "delete" and operation.path.endswith(".py")
-                ]
-                if python_paths:
-                    formatted = subprocess.run(
-                        [
-                            sys.executable,
-                            "-m",
-                            "ruff",
-                            "format",
-                            "--quiet",
-                            *python_paths,
-                        ],
-                        cwd=workspace.path,
-                        capture_output=True,
-                        text=True,
-                        timeout=20,
-                        check=False,
+                eof_adjusted = _ensure_final_newline(workspace.path, proposal.operations)
+                formatted_paths, skipped_paths, format_errors = await asyncio.to_thread(
+                    _format_proposed_files, workspace.path, proposal.operations, error
+                )
+                formatted_paths = list(dict.fromkeys([*eof_adjusted, *formatted_paths]))
+                if formatted_paths and on_progress:
+                    await on_progress(
+                        "coding.proposal.formatted",
+                        "Applied available repository-configured formatters before calculating "
+                        "the patch fingerprint.",
+                        {"files": formatted_paths},
                     )
-                    if formatted.returncode == 0:
-                        if on_progress:
-                            await on_progress(
-                                "coding.proposal.formatted",
-                                "Applied Ruff formatting to proposed Python files before "
-                                "calculating the patch fingerprint.",
-                                {"files": python_paths},
-                            )
-                    elif on_progress:
-                        await on_progress(
-                            "coding.proposal.format_skipped",
-                            "Ruff formatting could not run; validation will report any "
-                            "formatting issues.",
-                            {
-                                "files": python_paths,
-                                "reason": redact_credentials(
-                                    formatted.stderr or formatted.stdout or "Ruff unavailable"
-                                )[:500],
-                            },
-                        )
+                if skipped_paths and on_progress:
+                    await on_progress(
+                        "coding.proposal.format_skipped",
+                        "Automatic formatting did not complete for some proposed files; "
+                        "validation will report any remaining formatting issues.",
+                        {"files": skipped_paths, "reasons": format_errors},
+                    )
                 diff = subprocess.run(
                     [
                         "git",

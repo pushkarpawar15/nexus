@@ -120,3 +120,101 @@ def test_validation_diagnostics_are_passed_to_the_coding_repair(tmp_path: Path) 
         assert "pytest -q" in coder.received_feedback
 
     asyncio.run(scenario())
+
+
+def test_identical_validation_diagnostics_stop_repair_loop(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        now = datetime.now(timezone.utc)
+        task = Task(
+            id="task-repeat-validation-feedback",
+            title="Fix formatter failures",
+            description="Apply the configured formatter",
+            repository_key="github-123",
+            status=TaskStatus.VALIDATING,
+            created_at=now,
+            updated_at=now,
+            created_by="operator-1",
+        )
+        workspace_path = tmp_path / "workspace"
+        workspace_path.mkdir()
+        (workspace_path / "README.md").write_text("content\n", encoding="utf-8")
+        fingerprint = compute_patch_fingerprint(workspace_path)
+        execution = ExecutionRecord(
+            id="execution-repeat-validation-feedback",
+            task_id=task.id,
+            assigned_worker="coding-agent",
+            status=ExecutionStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+            repository_key=task.repository_key,
+            patch_fingerprint=fingerprint,
+            changed_files=["README.md"],
+        )
+        tasks = MemoryTaskRepository()
+        await tasks.create(task)
+        records = create_memory_workflow_repositories()
+        await records.executions.create(execution)
+
+        class RepairCoder:
+            calls = 0
+
+            async def edit(self, _task, workspace, **_options):
+                self.calls += 1
+                return (
+                    ["README.md"],
+                    compute_patch_fingerprint(workspace.path),
+                    "Attempted a formatter repair.",
+                )
+
+        class RepeatingValidator:
+            calls = 0
+
+            async def validate(self, current_task, current_execution, _workspace):
+                self.calls += 1
+                command = ValidationCommandResult(
+                    command_id="ruff-format",
+                    command="ruff format --check app/models.py",
+                    status=ValidationCommandStatus.FAILED,
+                    exit_code=1,
+                    stdout_excerpt="Would reformat: app/models.py",
+                    error="Configured formatter check failed.",
+                )
+                return ValidationReport(
+                    id=f"repeated-validation-{self.calls}",
+                    execution_id=current_execution.id,
+                    task_id=current_task.id,
+                    patch_fingerprint=current_execution.patch_fingerprint,
+                    overall_status=ValidationStatus.FAILED,
+                    started_at=now,
+                    finished_at=now,
+                    commands=[command],
+                    summary="The configured formatter check failed.",
+                )
+
+        coder = RepairCoder()
+        validator = RepeatingValidator()
+        pipeline = ExecutionPipeline(
+            Settings(_env_file=None, environment="testing", storage="memory"),
+            tasks,
+            records,
+            coder=coder,
+            validator=validator,
+        )
+        workspace = SimpleNamespace(
+            path=workspace_path,
+            branch="test-branch",
+            base_commit_sha="a" * 40,
+        )
+
+        result = await pipeline._validate_until_pass(task, execution, workspace, {})
+
+        assert result is None
+        assert validator.calls == 3
+        assert coder.calls == 2
+        current_task = await tasks.get(task.id)
+        current_execution = await records.executions.get(execution.id)
+        assert current_task.status == TaskStatus.BLOCKED
+        assert current_execution.status == ExecutionStatus.BLOCKED
+        assert current_execution.final_result == "VALIDATION_REPAIR_STALLED"
+
+    asyncio.run(scenario())

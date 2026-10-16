@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import threading
@@ -879,6 +880,8 @@ class ExecutionPipeline:
         *,
         repair_round: int = 0,
     ):
+        last_failure_fingerprint: str | None = None
+        repeated_failure_count = 0
         while True:
             await self._event(
                 task.id,
@@ -903,6 +906,28 @@ class ExecutionPipeline:
                 return execution, validation, repair_round
             if validation.overall_status == ValidationStatus.BLOCKED:
                 await self._finish_blocked_validation(task, execution, validation)
+                return None
+
+            repair_feedback = _validation_feedback(validation)
+            failure_fingerprint = hashlib.sha256(repair_feedback.encode("utf-8")).hexdigest()
+            if failure_fingerprint == last_failure_fingerprint:
+                repeated_failure_count += 1
+            else:
+                repeated_failure_count = 0
+            last_failure_fingerprint = failure_fingerprint
+            if repeated_failure_count >= 2:
+                reason = (
+                    "Validation returned the same failure diagnostics after two coding repairs. "
+                    "Stopped automatic retries to prevent repeating an ineffective repair. "
+                    + validation.summary
+                )[:2000]
+                await self._finish_repair_stalled_validation(
+                    task,
+                    execution,
+                    validation,
+                    reason=reason,
+                    repair_rounds=repair_round,
+                )
                 return None
 
             can_repair = (
@@ -975,7 +1000,6 @@ class ExecutionPipeline:
                 continue
 
             repair_round += 1
-            repair_feedback = _validation_feedback(validation)
             await self._event(
                 task.id,
                 execution.id,
@@ -1077,6 +1101,36 @@ class ExecutionPipeline:
             )
         await self._finish_execution(
             execution, ExecutionStatus.BLOCKED, reason, "VALIDATION_BLOCKED"
+        )
+
+    async def _finish_repair_stalled_validation(
+        self, task, execution, validation, *, reason: str, repair_rounds: int
+    ) -> None:
+        await self._event(
+            task.id,
+            execution.id,
+            "validation.repair_stalled",
+            reason,
+            {
+                "repair_rounds": repair_rounds,
+                "commands": _validation_evidence(validation),
+            },
+        )
+        current = await self.tasks.get(task.id)
+        if current and current.status == TaskStatus.VALIDATING:
+            await WorkflowService(self.tasks).transition(
+                current,
+                TaskStatus.BLOCKED,
+                actor="validator",
+                reason=reason,
+                evidence=TransitionEvidence(
+                    kind=TransitionEvidenceKind.VALIDATION,
+                    reference=validation.id,
+                ),
+                trusted=True,
+            )
+        await self._finish_execution(
+            execution, ExecutionStatus.BLOCKED, reason, "VALIDATION_REPAIR_STALLED"
         )
 
     async def stop_active_processes(self, execution_id: str) -> None:
