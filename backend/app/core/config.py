@@ -168,7 +168,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CLOUD_RUN_EXECUTION_REGION", "cloud_run_region"),
     )
     cloud_run_execution_timeout_seconds: int = Field(
-        default=3600,
+        default=7200,
         ge=60,
         le=604800,
         validation_alias=AliasChoices(
@@ -194,9 +194,9 @@ class Settings(BaseSettings):
         ),
     )
     validation_agent_timeout_seconds: int = Field(
-        default=1200,
+        default=3600,
         ge=60,
-        le=3600,
+        le=5400,
         validation_alias=AliasChoices(
             "NEXUS_VALIDATION_TIMEOUT_SECONDS", "validation_agent_timeout_seconds"
         ),

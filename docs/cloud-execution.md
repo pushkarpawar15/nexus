@@ -127,7 +127,7 @@ ATTACHMENTS_BUCKET=<private GCS bucket already used by NEXUS>
 NEXUS_EXECUTION_BACKEND=cloud_run_jobs
 NEXUS_CODING_ENABLED=true
 NEXUS_VALIDATION_ENABLED=true
-NEXUS_VALIDATION_TIMEOUT_SECONDS=1200
+NEXUS_VALIDATION_TIMEOUT_SECONDS=3600
 CLOUD_RUN_EXECUTION_JOB=nexus-execution-worker
 CLOUD_RUN_EXECUTION_REGION=asia-south1
 ```
@@ -142,7 +142,7 @@ Create the job first. Replace `PROJECT_ID` and secret names in the command:
 gcloud run jobs create nexus-execution-worker \
   --image "$WORKER_IMAGE" --region "$REGION" --service-account "$WORKER_SA" \
   --task-timeout 2h --max-retries 0 --tasks 1 --cpu 2 --memory 4Gi \
-  --set-env-vars NEXUS_ENV=production,NEXUS_STORAGE=firestore,GOOGLE_CLOUD_PROJECT="$PROJECT_ID",FIREBASE_PROJECT_ID="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="$REGION",NEXUS_EXECUTION_BACKEND=cloud_run_jobs,NEXUS_CODING_ENABLED=true,NEXUS_VALIDATION_ENABLED=true,NEXUS_VALIDATION_TIMEOUT_SECONDS=1200,ATTACHMENTS_BUCKET=YOUR_PRIVATE_BUCKET,WORKSPACE_ROOT=/tmp/nexus-workspaces \
+  --set-env-vars NEXUS_ENV=production,NEXUS_STORAGE=firestore,GOOGLE_CLOUD_PROJECT="$PROJECT_ID",FIREBASE_PROJECT_ID="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="$REGION",NEXUS_EXECUTION_BACKEND=cloud_run_jobs,NEXUS_CODING_ENABLED=true,NEXUS_VALIDATION_ENABLED=true,NEXUS_VALIDATION_TIMEOUT_SECONDS=3600,ATTACHMENTS_BUCKET=YOUR_PRIVATE_BUCKET,WORKSPACE_ROOT=/tmp/nexus-workspaces \
   --set-secrets GITHUB_APP_ID=nexus-github-app-id:latest,GITHUB_APP_SLUG=nexus-github-app-slug:latest,GITHUB_APP_PRIVATE_KEY=nexus-github-app-private-key:latest,GITHUB_APP_STATE_SECRET=nexus-github-app-state-secret:latest
 ```
 
@@ -156,7 +156,7 @@ Example API deploy skeleton (add the model IDs, frontend URL, exact CORS origin,
 gcloud run deploy nexus-api --image "$API_IMAGE" --region "$REGION" \
   --service-account "$API_SA" --allow-unauthenticated --min 0 --max 2 \
   --cpu 1 --memory 1Gi --timeout 300 \
-  --set-env-vars NEXUS_ENV=production,NEXUS_STORAGE=firestore,GOOGLE_CLOUD_PROJECT="$PROJECT_ID",FIREBASE_PROJECT_ID="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="$REGION",NEXUS_EXECUTION_BACKEND=cloud_run_jobs,NEXUS_CODING_ENABLED=true,NEXUS_VALIDATION_ENABLED=true,NEXUS_VALIDATION_TIMEOUT_SECONDS=1200,CLOUD_RUN_EXECUTION_JOB=nexus-execution-worker,CLOUD_RUN_EXECUTION_REGION="$REGION",ATTACHMENTS_BUCKET=YOUR_PRIVATE_BUCKET,CORS_ORIGINS=https://YOUR_SITE.web.app,FRONTEND_URL=https://YOUR_SITE.web.app \
+  --set-env-vars NEXUS_ENV=production,NEXUS_STORAGE=firestore,GOOGLE_CLOUD_PROJECT="$PROJECT_ID",FIREBASE_PROJECT_ID="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="$REGION",NEXUS_EXECUTION_BACKEND=cloud_run_jobs,NEXUS_CODING_ENABLED=true,NEXUS_VALIDATION_ENABLED=true,NEXUS_VALIDATION_TIMEOUT_SECONDS=3600,CLOUD_RUN_EXECUTION_JOB=nexus-execution-worker,CLOUD_RUN_EXECUTION_REGION="$REGION",CLOUD_RUN_EXECUTION_TIMEOUT_SECONDS=7200,ATTACHMENTS_BUCKET=YOUR_PRIVATE_BUCKET,CORS_ORIGINS=https://YOUR_SITE.web.app,FRONTEND_URL=https://YOUR_SITE.web.app \
   --set-secrets GITHUB_APP_ID=nexus-github-app-id:latest,GITHUB_APP_SLUG=nexus-github-app-slug:latest,GITHUB_APP_PRIVATE_KEY=nexus-github-app-private-key:latest,GITHUB_APP_STATE_SECRET=nexus-github-app-state-secret:latest
 ```
 

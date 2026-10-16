@@ -251,3 +251,10 @@ def test_coding_model_timeout_defaults_to_three_minutes() -> None:
     settings = Settings(_env_file=None, environment="testing", storage="memory")
 
     assert settings.coding_model_timeout_seconds == 180
+
+
+def test_antigravity_and_cloud_run_timeouts_leave_execution_headroom() -> None:
+    settings = Settings(_env_file=None, environment="testing", storage="memory")
+
+    assert settings.validation_agent_timeout_seconds == 3600
+    assert settings.cloud_run_execution_timeout_seconds == 7200

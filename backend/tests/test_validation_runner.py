@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 from google.antigravity import types
 from google.antigravity.hooks.hooks import OperationContext, SessionContext, TurnContext
 from google.antigravity.hooks.policy import enforce
@@ -15,6 +17,7 @@ from app.integrations.validation_runner import (
     AgentValidationCheck,
     AgentValidationOutput,
     AntigravityValidationRunner,
+    _run_isolated_antigravity_call,
     compute_patch_fingerprint,
 )
 from app.models.task import Task, TaskStatus
@@ -54,6 +57,49 @@ def make_workspace(root: Path) -> Path:
     (root / "src").mkdir()
     (root / "src" / "app.ts").write_text("export const answer = 42;\n", encoding="utf-8")
     return root
+
+
+def _hang_in_antigravity_worker() -> None:
+    while True:
+        time.sleep(1)
+
+
+def test_antigravity_startup_timeout_kills_isolated_worker_process() -> None:
+    async def run() -> None:
+        with pytest.raises(
+            validation_runner.AntigravityTimeoutError,
+            match="project discovery exceeded its 1-second timeout",
+        ):
+            await _run_isolated_antigravity_call(
+                _hang_in_antigravity_worker,
+                timeout_seconds=1,
+                stage="project discovery",
+            )
+
+    asyncio.run(run())
+
+
+def test_antigravity_timeout_is_reported_as_timed_out(tmp_path: Path) -> None:
+    task, execution = records()
+    workspace = make_workspace(tmp_path / "workspace")
+    runner = AntigravityValidationRunner(
+        Settings(_env_file=None, environment="testing", storage="memory")
+    )
+
+    async def timeout(_task, _execution, _workspace):
+        raise validation_runner.AntigravityTimeoutError(
+            "Antigravity project discovery exceeded its 600-second timeout."
+        )
+
+    runner._discover_project_setups = timeout
+    fingerprint = compute_patch_fingerprint(workspace)
+    execution.patch_fingerprint = fingerprint
+
+    report = runner.run(task, execution, workspace, expected_fingerprint=fingerprint)
+
+    assert report.overall_status == ValidationStatus.BLOCKED
+    assert report.commands[0].status == ValidationCommandStatus.TIMED_OUT
+    assert "project discovery" in report.summary
 
 
 def run_with_output(

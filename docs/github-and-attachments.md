@@ -88,7 +88,7 @@ For local coding, install the Antigravity SDK and the runtimes needed by the rep
 WORKSPACE_ROOT=/tmp/nexus-workspaces
 NEXUS_CODING_ENABLED=true
 NEXUS_VALIDATION_ENABLED=true
-NEXUS_VALIDATION_TIMEOUT_SECONDS=1200
+NEXUS_VALIDATION_TIMEOUT_SECONDS=3600
 NEXUS_AI_PERMISSIONS=ai_execute,ai_validate,security_review
 ```
 

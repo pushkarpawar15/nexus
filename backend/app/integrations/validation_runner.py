@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
+import multiprocessing
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -171,6 +174,105 @@ class AgentProjectSetup(StrictModel):
 class AgentPreparationPlan(StrictModel):
     summary: str = Field(min_length=1, max_length=1500)
     projects: list[AgentProjectSetup] = Field(max_length=30)
+
+
+class AntigravityTimeoutError(TimeoutError):
+    """Raised when an isolated Antigravity request exceeds its stage budget."""
+
+
+def _antigravity_process_entry(connection, target, args, kwargs) -> None:
+    """Run an Antigravity call in its own process group so hangs can be killed."""
+    try:
+        os.setsid()
+        result = target(*args, **kwargs)
+        if inspect.isawaitable(result):
+            result = asyncio.run(result)
+        connection.send(("ok", result))
+    except BaseException as exc:
+        try:
+            connection.send(("error", type(exc).__name__, str(exc)))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        connection.close()
+
+
+async def _run_isolated_antigravity_call(
+    target,
+    *args,
+    timeout_seconds: int,
+    stage: str,
+    **kwargs,
+):
+    """Bound SDK startup, model work, and cleanup; kill localharness on timeout."""
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_antigravity_process_entry,
+        args=(sender, target, args, kwargs),
+        name=f"nexus-antigravity-{stage.replace(' ', '-')}",
+    )
+    try:
+        process.start()
+        sender.close()
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while True:
+            if receiver.poll():
+                response = receiver.recv()
+                process.join(timeout=2)
+                if response[0] == "ok":
+                    return response[1]
+                _, error_type, message = response
+                if error_type in {"TimeoutError", "TimeoutExpired"}:
+                    raise AntigravityTimeoutError(
+                        f"Antigravity {stage} timed out: {message or 'the SDK request timed out.'}"
+                    )
+                raise RuntimeError(
+                    f"Antigravity {stage} failed ({error_type}): "
+                    f"{message or 'no error details were returned.'}"
+                )
+            if not process.is_alive():
+                process.join()
+                if receiver.poll():
+                    continue
+                raise RuntimeError(
+                    f"Antigravity {stage} worker exited without returning a result "
+                    f"(exit code {process.exitcode})."
+                )
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AntigravityTimeoutError(
+                    f"Antigravity {stage} exceeded its {timeout_seconds}-second timeout. "
+                    "The isolated agent process was stopped."
+                )
+            await asyncio.sleep(0.1)
+    finally:
+        receiver.close()
+        try:
+            sender.close()
+        except OSError:
+            pass
+        if process.pid is not None:
+            _stop_antigravity_process_group(process)
+
+
+def _stop_antigravity_process_group(process) -> None:
+    if process.pid is None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        if process.is_alive():
+            process.terminate()
+    except PermissionError:
+        if process.is_alive():
+            process.terminate()
+    process.join(timeout=2)
+    if process.is_alive():
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            process.kill()
+        process.join(timeout=2)
 
 
 def compute_patch_fingerprint(source_root: Path) -> str:
@@ -965,6 +1067,21 @@ class AntigravityValidationRunner:
         execution: ExecutionRecord,
         workspace: Path,
     ) -> AgentPreparationPlan:
+        return await _run_isolated_antigravity_call(
+            self._discover_project_setups_with_sdk,
+            task,
+            execution,
+            workspace,
+            timeout_seconds=min(self.settings.validation_agent_timeout_seconds, 600),
+            stage="project discovery",
+        )
+
+    async def _discover_project_setups_with_sdk(
+        self,
+        task: Task,
+        execution: ExecutionRecord,
+        workspace: Path,
+    ) -> AgentPreparationPlan:
         if not self.settings.google_cloud_project:
             raise RuntimeError("Google Cloud project is not configured for Antigravity validation.")
         from google.antigravity import Agent, LocalAgentConfig, types
@@ -1014,10 +1131,9 @@ class AntigravityValidationRunner:
                     else "The Antigravity inspection sandbox is unavailable."
                 )
                 raise RuntimeError(f"Project discovery blocked: {reason}")
-            async with asyncio.timeout(min(self.settings.validation_agent_timeout_seconds, 180)):
-                response = await agent.chat(json.dumps(prompt, ensure_ascii=False))
-                await response.resolve()
-                output = await response.structured_output()
+            response = await agent.chat(json.dumps(prompt, ensure_ascii=False))
+            await response.resolve()
+            output = await response.structured_output()
         return AgentPreparationPlan.model_validate(output)
 
     @staticmethod
@@ -1165,6 +1281,22 @@ class AntigravityValidationRunner:
                 ValidationStatus.BLOCKED,
                 "Validation was stopped by an operator.",
             )
+        except AntigravityTimeoutError as exc:
+            reason = _redact_output(str(exc))
+            result = ValidationCommandResult(
+                command_id="antigravity_validation",
+                status=ValidationCommandStatus.TIMED_OUT,
+                error=reason[:1000],
+            )
+            return _report(
+                task,
+                execution,
+                expected_fingerprint,
+                started_at,
+                [result],
+                ValidationStatus.BLOCKED,
+                reason[:2000],
+            )
         except Exception as exc:
             reason = _redact_output(str(exc).strip() or type(exc).__name__)
             result = ValidationCommandResult(
@@ -1183,6 +1315,26 @@ class AntigravityValidationRunner:
             )
 
     async def _ask_antigravity(
+        self,
+        task: Task,
+        execution: ExecutionRecord,
+        workspace: Path,
+        *,
+        dependency_setup: list[ValidationCommandResult] | None = None,
+        project_inventory: list[dict[str, str]] | None = None,
+    ) -> tuple[AgentValidationOutput, list[str]]:
+        return await _run_isolated_antigravity_call(
+            self._ask_antigravity_with_sdk,
+            task,
+            execution,
+            workspace,
+            dependency_setup=dependency_setup,
+            project_inventory=project_inventory,
+            timeout_seconds=self.settings.validation_agent_timeout_seconds,
+            stage="repository checks",
+        )
+
+    async def _ask_antigravity_with_sdk(
         self,
         task: Task,
         execution: ExecutionRecord,
@@ -1250,10 +1402,9 @@ class AntigravityValidationRunner:
                     else "The Antigravity command sandbox is unavailable."
                 )
                 raise RuntimeError(f"Validation blocked for safety: {reason}")
-            async with asyncio.timeout(self.settings.validation_agent_timeout_seconds):
-                response = await agent.chat(json.dumps(prompt, ensure_ascii=False))
-                chunks = await response.resolve()
-                structured = await response.structured_output()
+            response = await agent.chat(json.dumps(prompt, ensure_ascii=False))
+            chunks = await response.resolve()
+            structured = await response.structured_output()
             command_calls = 0
             for chunk in chunks:
                 if (
