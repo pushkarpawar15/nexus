@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +65,10 @@ def _hang_in_antigravity_worker() -> None:
         time.sleep(1)
 
 
+def _exit_without_antigravity_result() -> None:
+    os._exit(17)
+
+
 def test_antigravity_startup_timeout_kills_isolated_worker_process() -> None:
     async def run() -> None:
         with pytest.raises(
@@ -73,6 +78,21 @@ def test_antigravity_startup_timeout_kills_isolated_worker_process() -> None:
             await _run_isolated_antigravity_call(
                 _hang_in_antigravity_worker,
                 timeout_seconds=1,
+                stage="project discovery",
+            )
+
+    asyncio.run(run())
+
+
+def test_antigravity_worker_exit_without_result_has_actionable_error() -> None:
+    async def run() -> None:
+        with pytest.raises(
+            RuntimeError,
+            match=r"worker closed its result channel without a response \(exit code 17\)",
+        ):
+            await _run_isolated_antigravity_call(
+                _exit_without_antigravity_result,
+                timeout_seconds=5,
                 stage="project discovery",
             )
 

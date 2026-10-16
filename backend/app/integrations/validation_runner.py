@@ -218,7 +218,14 @@ async def _run_isolated_antigravity_call(
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
             if receiver.poll():
-                response = receiver.recv()
+                try:
+                    response = receiver.recv()
+                except EOFError as exc:
+                    process.join()
+                    raise RuntimeError(
+                        f"Antigravity {stage} worker closed its result channel without a "
+                        f"response (exit code {process.exitcode}). Check worker startup logs."
+                    ) from exc
                 process.join(timeout=2)
                 if response[0] == "ok":
                     return response[1]

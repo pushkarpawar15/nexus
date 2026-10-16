@@ -19,4 +19,4 @@ COPY pyproject.toml ./pyproject.toml
 COPY app ./app
 RUN python -m pip install --no-cache-dir .
 
-CMD ["python", "-m", "app.cloud_worker"]
+CMD ["python", "-m", "app.cloud_worker_entry"]
