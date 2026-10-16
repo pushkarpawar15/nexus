@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-import pydantic as pydantic_runtime
 from pydantic import Field, model_validator
 
 from app.core.config import Settings
@@ -222,7 +221,12 @@ async def _run_isolated_antigravity_call(
     **kwargs,
 ):
     """Bound SDK startup, model work, and cleanup; kill localharness on timeout."""
-    context = multiprocessing.get_context("spawn")
+    # The application has already imported its dependencies in this worker. On
+    # Linux, fork inherits that loaded module state and avoids re-importing the
+    # validation stack while unpickling the callable. The spawned interpreter
+    # repeatedly failed to resolve Pydantic in the production worker despite
+    # site-packages being present on sys.path.
+    context = multiprocessing.get_context("fork" if hasattr(os, "fork") else "spawn")
     receiver, sender = context.Pipe(duplex=False)
     payload = pickle.dumps((target, args, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
     module_search_paths = list(
@@ -231,7 +235,6 @@ async def _run_isolated_antigravity_call(
                 *sys.path,
                 *site.getsitepackages(),
                 *(path for path in sysconfig.get_paths().values() if path and os.path.isdir(path)),
-                os.path.dirname(os.path.dirname(pydantic_runtime.__file__)),
                 *(
                     [site.getusersitepackages()]
                     if isinstance(site.getusersitepackages(), str)
