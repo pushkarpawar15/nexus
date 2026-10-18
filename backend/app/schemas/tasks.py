@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, field_validator, model_validator
 
@@ -118,6 +118,7 @@ class TaskTransitionRequest(StrictModel):
 
 class HumanInputRequest(StrictModel):
     answer: Annotated[str, StringConstraints(min_length=1, max_length=4000)]
+    follow_up: Literal["more_info", "fix_request"] | None = None
 
     @model_validator(mode="after")
     def validate_answer(self) -> HumanInputRequest:

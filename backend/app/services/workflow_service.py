@@ -54,10 +54,21 @@ LEGAL_EDGES = {
         TaskStatus.SECURITY_REVIEW,
         TaskStatus.BLOCKED,
     },
-    TaskStatus.APPROVED: {TaskStatus.PR_CREATED, TaskStatus.BLOCKED},
+    # An approved task can be sent back to the planner (trusted services) when
+    # an operator requests a fix before or after a failed PR publication.
+    TaskStatus.APPROVED: {TaskStatus.ANALYZING, TaskStatus.PR_CREATED, TaskStatus.BLOCKED},
     TaskStatus.REJECTED: {TaskStatus.TRIAGED},
-    TaskStatus.PR_CREATED: {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED},
-    TaskStatus.COMPLETED: set(),
+    TaskStatus.PR_CREATED: {
+        # A published pull request can be re-opened by the planner (trusted
+        # services) when an operator requests another patch after manual testing.
+        TaskStatus.ANALYZING,
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.BLOCKED,
+    },
+    # A completed task can be re-opened only by the planner (trusted services),
+    # for example when an operator submits follow-up guidance or asks for a fix.
+    TaskStatus.COMPLETED: {TaskStatus.ANALYZING},
     TaskStatus.FAILED: {
         TaskStatus.ANALYZING,
         TaskStatus.READY,

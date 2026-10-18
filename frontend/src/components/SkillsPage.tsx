@@ -18,6 +18,7 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
+  MarkdownPreview,
   Panel,
   fieldClass,
 } from './ui';
@@ -39,6 +40,7 @@ export function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [draft, setDraft] = useState<SkillWriteInput>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [previewInstructions, setPreviewInstructions] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -68,6 +70,7 @@ export function SkillsPage() {
 
   function beginEdit(skill: Skill) {
     setEditingId(skill.id);
+    setPreviewInstructions(false);
     setDraft({
       name: skill.name,
       description: skill.description,
@@ -80,11 +83,16 @@ export function SkillsPage() {
 
   function resetDraft() {
     setEditingId(null);
+    setPreviewInstructions(false);
     setDraft(emptyDraft);
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!draft.instructions.trim()) {
+      showToast('error', 'Add Markdown instructions before saving.');
+      return;
+    }
     setSaving(true);
     try {
       const body = {
@@ -267,13 +275,13 @@ export function SkillsPage() {
                       </Button>
                     </div>
                   </div>
-                  <details className="mt-3 text-xs text-muted">
-                    <summary className="cursor-pointer">
+                  <details className="mt-3 text-xs">
+                    <summary className="cursor-pointer text-muted">
                       Preview instructions
                     </summary>
-                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-elevated p-3 font-mono text-[11px] leading-5 text-zinc-300">
-                      {skill.instructions}
-                    </pre>
+                    <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-line bg-white p-4">
+                      <MarkdownPreview content={skill.instructions} />
+                    </div>
                   </details>
                 </Panel>
               ))}
@@ -374,24 +382,61 @@ export function SkillsPage() {
                 </select>
               </label>
             )}
-            <label className="text-sm font-semibold">
-              Markdown instructions
-              <textarea
-                className={`${fieldClass} font-mono text-xs leading-5`}
-                maxLength={20_000}
-                minLength={1}
-                required
-                rows={12}
-                value={draft.instructions}
-                onChange={(event) =>
-                  setDraft({ ...draft, instructions: event.target.value })
-                }
-              />
+            <div className="text-sm font-semibold">
+              <div className="flex items-center justify-between gap-3">
+                <span>Markdown instructions</span>
+                <div
+                  className="flex gap-1"
+                  role="group"
+                  aria-label="Editor mode"
+                >
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    aria-pressed={!previewInstructions}
+                    onClick={() => setPreviewInstructions(false)}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    aria-pressed={previewInstructions}
+                    onClick={() => setPreviewInstructions(true)}
+                  >
+                    Preview
+                  </Button>
+                </div>
+              </div>
+              {previewInstructions ? (
+                <div className="mt-2 max-h-80 min-h-48 overflow-auto rounded-xl border border-line bg-white p-4 font-normal">
+                  {draft.instructions.trim() ? (
+                    <MarkdownPreview content={draft.instructions} />
+                  ) : (
+                    <p className="text-xs text-muted">
+                      Nothing to preview yet. Write some Markdown instructions
+                      or import a SKILL.md file.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <textarea
+                  className={`${fieldClass} font-mono text-xs leading-5`}
+                  maxLength={20_000}
+                  minLength={1}
+                  required
+                  rows={12}
+                  value={draft.instructions}
+                  onChange={(event) =>
+                    setDraft({ ...draft, instructions: event.target.value })
+                  }
+                />
+              )}
               <span className="mt-1 block text-right text-xs font-normal text-muted">
                 {draft.instructions.length.toLocaleString()} / 20,000 characters
               </span>
-            </label>
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+            </div>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600">
               <FileUp size={15} />
               Import `SKILL.md`
               <input
@@ -404,7 +449,7 @@ export function SkillsPage() {
                 }}
               />
             </label>
-            <label className="flex items-center gap-2 text-sm text-zinc-300">
+            <label className="flex items-center gap-2 text-sm text-slate-600">
               <input
                 type="checkbox"
                 checked={draft.enabled}

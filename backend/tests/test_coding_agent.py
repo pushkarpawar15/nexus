@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.integrations.validation_runner import MODEL_API_MAX_RETRIES
 from app.schemas.skills import SkillRecord
 from app.services.coding_agent import (
     AntigravityCodingAgent,
@@ -82,6 +83,8 @@ def test_antigravity_prompt_contains_skill_guidance_as_untrusted_data(monkeypatc
     fake_types = SimpleNamespace(
         BuiltinTools=SimpleNamespace(FINISH="finish"),
         CapabilitiesConfig=lambda **kwargs: kwargs,
+        ModelAPIRetryConfig=lambda **kwargs: kwargs,
+        RetryConfig=lambda **kwargs: kwargs,
     )
     fake_sdk = ModuleType("google.antigravity")
     fake_sdk.Agent = FakeAgent
@@ -134,6 +137,7 @@ def test_antigravity_prompt_contains_skill_guidance_as_untrusted_data(monkeypatc
     assert "Do these steps in order" in captured["config"]["system_instructions"]
     assert "configured formatter's style" in captured["config"]["system_instructions"]
     assert "host formats changed files" in captured["config"]["system_instructions"]
+    assert captured["config"]["retry_config"]["api_retry"]["max_retries"] == MODEL_API_MAX_RETRIES
 
 
 def test_ensure_final_newline_repairs_generated_text_files(tmp_path) -> None:

@@ -34,7 +34,7 @@ export function AuthDialog({
   }
   return (
     <div
-      className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-4"
+      className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
@@ -42,7 +42,7 @@ export function AuthDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="auth-title"
-        className="w-full max-w-md rounded-2xl border border-line bg-panel p-6 shadow-2xl"
+        className="w-full max-w-md rounded-2xl border border-line bg-panel p-6 shadow-xl"
       >
         <div className="flex items-start justify-between">
           <div>
@@ -82,7 +82,7 @@ export function AuthDialog({
               />
             </label>
             {error && (
-              <p role="alert" className="text-sm text-rose-300">
+              <p role="alert" className="text-sm text-red-600">
                 {error}
               </p>
             )}
@@ -120,7 +120,7 @@ export function AuthDialog({
               </Button>
             )}
             {error && (
-              <p role="alert" className="mt-3 text-sm text-rose-300">
+              <p role="alert" className="mt-3 text-sm text-red-600">
                 {error}
               </p>
             )}

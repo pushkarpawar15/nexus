@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import subprocess
+import tempfile
 from pathlib import Path
 
 from app.core.config import Settings
+from app.core.logging import redact_credentials
 from app.integrations.validation_runner import compute_patch_fingerprint
 from app.repositories.records import WorkflowRepositories
 from app.repositories.tasks import TaskRepository
 from app.schemas.execution import ExecutionStatus
 from app.schemas.security import SecurityStatus
 from app.schemas.validation import ValidationStatus
+
+logger = logging.getLogger(__name__)
 
 
 class PublicationGate:
@@ -20,7 +25,14 @@ class PublicationGate:
     ) -> None:
         self.settings, self.tasks, self.records = settings, tasks, records
 
-    async def check(self, task_id: str, execution_id: str) -> tuple[bool, str | None]:
+    async def check(
+        self,
+        task_id: str,
+        execution_id: str,
+        *,
+        workspace_override: Path | None = None,
+        workspace_root_override: Path | None = None,
+    ) -> tuple[bool, str | None]:
         task = await self.tasks.get(task_id)
         execution = await self.records.executions.get(execution_id)
         if task is None or execution is None or execution.task_id != task_id:
@@ -32,8 +44,27 @@ class PublicationGate:
             return False, "Execution has not completed successfully."
         if not execution.patch_fingerprint or not execution.workspace_reference:
             return False, "Execution has no verified patch workspace."
-        root = self.settings.workspace_root
-        workspace = Path(execution.workspace_reference)
+        if workspace_override is None and execution.workspace_reference.startswith("gs://"):
+            with tempfile.TemporaryDirectory(prefix="nexus-publication-check-") as temporary:
+                from app.integrations.workspace_artifact import download_workspace
+
+                try:
+                    workspace = await asyncio.to_thread(
+                        download_workspace,
+                        self.settings,
+                        execution.workspace_reference,
+                        Path(temporary) / "workspace",
+                    )
+                except Exception:
+                    return False, "Execution workspace is unavailable."
+                return await self.check(
+                    task_id,
+                    execution_id,
+                    workspace_override=workspace,
+                    workspace_root_override=Path(temporary),
+                )
+        root = workspace_root_override or self.settings.workspace_root
+        workspace = workspace_override or Path(execution.workspace_reference)
         if root is None or workspace.is_symlink() or not workspace.exists():
             return False, "Execution workspace is unavailable."
         resolved_root, resolved_workspace = root.resolve(), workspace.resolve()
@@ -81,7 +112,12 @@ class PublicationGate:
                 fingerprint = hashlib.sha256(diff).hexdigest()
             else:
                 fingerprint = await asyncio.to_thread(compute_patch_fingerprint, resolved_workspace)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Publication gate could not verify the workspace patch for execution %s: %s",
+                execution_id,
+                " ".join(redact_credentials(str(exc)).split())[:500] or type(exc).__name__,
+            )
             return False, "Current workspace patch could not be verified."
         if fingerprint != execution.patch_fingerprint:
             return False, "Workspace patch is stale."

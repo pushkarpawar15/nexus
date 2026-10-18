@@ -15,6 +15,7 @@ import {
   GitPullRequest,
   GitBranch,
   Copy,
+  Info,
   Pencil,
   Paperclip,
   Download,
@@ -25,6 +26,7 @@ import {
   Sparkles,
   Square,
   Users,
+  Wrench,
   Zap,
 } from 'lucide-react';
 import {
@@ -95,6 +97,7 @@ import {
   relativeDate,
   statusTone,
   taskActivity,
+  type Lane,
 } from './lib/format';
 import { AppShell } from './components/AppShell';
 import { SkillsPage } from './components/SkillsPage';
@@ -108,6 +111,21 @@ import {
 } from './components/ui';
 
 type ShellContext = { openCreate: () => void };
+/** Stage-state colors for the workflow pipeline: neutral before start, blue while
+ * active, cyan/violet for AI-driven work, amber for human decisions, green for
+ * completion, red for failed or blocked work. */
+const laneColors: Record<Lane, string> = {
+  Backlog: 'bg-slate-300',
+  'AI Queue': 'bg-cyan-500',
+  'Human Queue': 'bg-amber-500',
+  'Hybrid Queue': 'bg-violet-500',
+  'In Progress': 'bg-blue-600',
+  Validation: 'bg-blue-500',
+  Approval: 'bg-amber-500',
+  'Needs Attention': 'bg-red-500',
+  'PR Review': 'bg-blue-600',
+  Shipped: 'bg-green-600',
+};
 function Heading({
   eyebrow,
   title,
@@ -138,7 +156,7 @@ function TaskCard({ task }: { task: Task }) {
   return (
     <Link
       to={`/tasks/${task.id}`}
-      className="block rounded-2xl border border-line bg-panel p-4 transition hover:-translate-y-0.5 hover:border-zinc-500"
+      className="block rounded-2xl border border-line bg-panel p-4 transition hover:-translate-y-0.5 hover:border-slate-300"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="truncate text-xs text-muted">
@@ -191,7 +209,7 @@ function ActivityList({ events }: { events: Activity[] }) {
       {events.map((event) => (
         <div key={event.id} className="flex gap-3 py-4 first:pt-0 last:pb-0">
           <span
-            className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${/failed|blocked/i.test(event.event_type) ? 'bg-rose-400' : 'bg-mint'}`}
+            className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${/failed|blocked/i.test(event.event_type) ? 'bg-red-500' : 'bg-primary'}`}
           />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -207,7 +225,7 @@ function ActivityList({ events }: { events: Activity[] }) {
             {Object.keys(event.metadata).length > 0 && (
               <details className="mt-2 text-xs text-muted">
                 <summary className="cursor-pointer">Details</summary>
-                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-elevated p-3 font-mono text-[11px] leading-5 text-zinc-300">
+                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-elevated p-3 font-mono text-[11px] leading-5 text-slate-600">
                   {JSON.stringify(event.metadata, null, 2)}
                 </pre>
               </details>
@@ -215,7 +233,7 @@ function ActivityList({ events }: { events: Activity[] }) {
             <p className="mt-1 text-xs text-muted">
               {label(event.worker_name)} ·{' '}
               <Link
-                className="text-mint hover:underline"
+                className="text-primary hover:underline"
                 to={`/tasks/${event.task_id}`}
               >
                 View task
@@ -289,11 +307,11 @@ function CommandCenter() {
           </Button>
         }
       />
-      <section className="relative mb-7 overflow-hidden rounded-3xl border border-mint/20 bg-gradient-to-br from-[#192a1c] via-[#121a19] to-[#10151d] p-7 sm:p-10">
-        <div className="absolute -right-8 -top-16 h-64 w-64 rounded-full border border-mint/10" />
-        <div className="absolute right-16 top-20 h-36 w-36 rounded-full border border-mint/10" />
-        <div className="absolute right-28 top-32 h-12 w-12 rounded-full bg-mint/5" />
-        <span className="absolute right-12 top-3 select-none font-display text-[220px] font-bold leading-none text-white/[.025]">
+      <section className="relative mb-7 overflow-hidden rounded-3xl border border-[#DBEAFE] bg-gradient-to-br from-[#EFF6FF] via-white to-[#ECFEFF] p-7 sm:p-10">
+        <div className="absolute -right-8 -top-16 h-64 w-64 rounded-full border border-[#BFDBFE]" />
+        <div className="absolute right-16 top-20 h-36 w-36 rounded-full border border-[#BFDBFE]" />
+        <div className="absolute right-28 top-32 h-12 w-12 rounded-full bg-[#DBEAFE]/50" />
+        <span className="absolute right-12 top-3 select-none font-display text-[220px] font-bold leading-none text-slate-900/[.03]">
           N
         </span>
         <div className="relative max-w-3xl">
@@ -301,13 +319,13 @@ function CommandCenter() {
           <h2 className="mt-3 font-display text-3xl font-bold leading-tight sm:text-5xl">
             From AI as a tool to AI as a teammate.
           </h2>
-          <p className="mt-4 max-w-xl text-sm leading-6 text-zinc-300">
+          <p className="mt-4 max-w-xl text-sm leading-6 text-slate-600">
             Coordinate specialized workers, keep every handoff visible, and make
             human judgment part of the workflow.
           </p>
           <Link
             to="/board"
-            className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-mint"
+            className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-primary"
           >
             Explore workforce board <ArrowRight size={16} />
           </Link>
@@ -333,7 +351,7 @@ function CommandCenter() {
               <Panel key={name} className="p-5">
                 <div className="flex items-center justify-between text-sm text-muted">
                   <span>{name}</span>
-                  <Icon size={17} className="text-mint" />
+                  <Icon size={17} className="text-primary" />
                 </div>
                 <p className="mt-5 font-display text-3xl font-bold">{count}</p>
                 <p className="mt-1 text-xs text-muted">
@@ -361,7 +379,7 @@ function CommandCenter() {
                       <span className="text-muted">{lane}</span>
                       <div className="h-2 overflow-hidden rounded-full bg-elevated">
                         <div
-                          className="h-full rounded-full bg-mint"
+                          className={`h-full rounded-full ${laneColors[lane]}`}
                           style={{
                             width: `${tasks.length ? (count / tasks.length) * 100 : 0}%`,
                           }}
@@ -402,7 +420,7 @@ function CommandCenter() {
                 );
               })}
               <div className="mt-7 rounded-xl border border-line bg-elevated/50 p-3 text-xs leading-5 text-muted">
-                <Users size={15} className="mb-2 text-mint" />
+                <Users size={15} className="mb-2 text-primary" />
                 Workers are assigned only after the analysis and deterministic
                 policy checks.
               </div>
@@ -415,7 +433,7 @@ function CommandCenter() {
                 Recently updated
               </h2>
             </div>
-            <Link to="/tasks" className="text-sm text-mint">
+            <Link to="/tasks" className="text-sm text-primary">
               All tasks <ArrowRight className="ml-1 inline" size={14} />
             </Link>
           </div>
@@ -476,7 +494,7 @@ function WorkforceBoard() {
               return (
                 <section
                   key={lane}
-                  className="w-[280px] rounded-2xl border border-line bg-[#0e1218] p-3"
+                  className="w-[280px] rounded-2xl border border-line bg-slate-50 p-3"
                 >
                   <div className="mb-3 flex items-center justify-between">
                     <h2 className="text-sm font-semibold">{lane}</h2>
@@ -535,7 +553,7 @@ function TasksPage() {
         ].map((status) => (
           <button
             onClick={() => setFilter(status)}
-            className={`rounded-full border px-3 py-2 text-xs ${filter === status ? 'border-mint/40 bg-mint/10 text-mint' : 'border-line text-muted'}`}
+            className={`rounded-full border px-3 py-2 text-xs ${filter === status ? 'border-primary/40 bg-primary/10 text-primary' : 'border-line text-muted'}`}
             key={status}
           >
             {label(status)}
@@ -722,7 +740,7 @@ function ApprovalsPage() {
                 </span>
               </div>
               <Link
-                className="mt-3 block font-display text-xl font-semibold hover:text-mint"
+                className="mt-3 block font-display text-xl font-semibold hover:text-primary"
                 to={`/tasks/${task.id}`}
               >
                 {task.title}
@@ -965,7 +983,7 @@ function RepositoriesPage() {
       )}
       <Panel className="mb-6 flex flex-wrap items-center justify-between gap-5 p-5 sm:p-7">
         <div className="flex items-start gap-4">
-          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-elevated text-mint">
+          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-elevated text-primary">
             <GitBranch size={22} />
           </span>
           <div>
@@ -1010,7 +1028,7 @@ function RepositoriesPage() {
           className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end"
           onSubmit={(event) => void connectWithPAT(event)}
         >
-          <label className="grid gap-2 text-sm font-medium text-zinc-200">
+          <label className="grid gap-2 text-sm font-medium text-slate-800">
             Repository
             <input
               required
@@ -1018,10 +1036,10 @@ function RepositoriesPage() {
               placeholder="owner/repository"
               value={repositoryName}
               onChange={(event) => setRepositoryName(event.target.value)}
-              className="min-h-11 rounded-xl border border-line bg-canvas px-3 text-sm outline-none focus:border-mint"
+              className="min-h-11 rounded-xl border border-line bg-white px-3 text-sm outline-none focus:border-primary"
             />
           </label>
-          <label className="grid gap-2 text-sm font-medium text-zinc-200">
+          <label className="grid gap-2 text-sm font-medium text-slate-800">
             Fine-grained token
             <input
               required
@@ -1030,7 +1048,7 @@ function RepositoriesPage() {
               placeholder="github_pat_…"
               value={pat}
               onChange={(event) => setPat(event.target.value)}
-              className="min-h-11 rounded-xl border border-line bg-canvas px-3 text-sm outline-none focus:border-mint"
+              className="min-h-11 rounded-xl border border-line bg-white px-3 text-sm outline-none focus:border-primary"
             />
           </label>
           <Button type="submit" loading={busy}>
@@ -1082,7 +1100,7 @@ function RepositoriesPage() {
               </p>
               {repo.owner && repo.repo && (
                 <a
-                  className="mt-4 inline-block text-xs font-semibold text-mint hover:underline"
+                  className="mt-4 inline-block text-xs font-semibold text-primary hover:underline"
                   href={`https://github.com/${repo.owner}/${repo.repo}`}
                   target="_blank"
                   rel="noreferrer"
@@ -1165,6 +1183,9 @@ function TaskDetail() {
   const [pendingRisk, setPendingRisk] = useState<Risk | null>(null);
   const [riskReason, setRiskReason] = useState('');
   const [humanAnswer, setHumanAnswer] = useState('');
+  const [followUpKind, setFollowUpKind] = useState<'more_info' | 'fix_request'>(
+    'fix_request',
+  );
   const [approvalReason, setApprovalReason] = useState('');
   const coreLoading = useRef(false);
   const slowRefreshLoading = useRef(false);
@@ -1401,7 +1422,10 @@ function TaskDetail() {
       setBusy(false);
     }
   }
-  async function submitHumanAnswer(event: FormEvent<HTMLFormElement>) {
+  async function submitHumanAnswer(
+    event: FormEvent<HTMLFormElement>,
+    followUp?: 'more_info' | 'fix_request',
+  ) {
     event.preventDefault();
     if (!task || !humanAnswer.trim()) return;
     setBusy(true);
@@ -1410,17 +1434,31 @@ function TaskDetail() {
         user,
         task.id,
         humanAnswer.trim(),
+        followUp,
       );
       setHumanAnswer('');
       const resumedSameExecution =
         task.pending_execution_id &&
         'task_id' in continuation &&
         continuation.id === task.pending_execution_id;
-      const message = !task.pending_execution_id
-        ? 'Guidance saved. The planner is analyzing the task again.'
-        : resumedSameExecution
-          ? 'Guidance saved. The coding workflow is resuming in its existing workspace.'
-          : 'Guidance saved. A fresh execution is starting with the saved guidance.';
+      const message =
+        task.status === 'APPROVED'
+          ? followUp === 'fix_request'
+            ? 'Follow-up saved. The task reopened; the planner is preparing a new patch with your fix request.'
+            : 'Follow-up saved. The task reopened; the planner is preparing a new patch with your new information.'
+          : task.status === 'PR_CREATED'
+            ? followUp === 'fix_request'
+              ? 'Follow-up saved. The task reopened; a new patch will be prepared and pushed to the same pull request.'
+              : 'Follow-up saved. The task reopened; a new patch with your information will be pushed to the same pull request.'
+            : task.status === 'COMPLETED'
+              ? followUp === 'fix_request'
+                ? 'Follow-up saved. The task reopened and the planner is analyzing it again with your fix request.'
+                : 'Follow-up saved. The task reopened and the planner is analyzing it again with your new information.'
+              : !task.pending_execution_id
+                ? 'Guidance saved. The planner is analyzing the task again.'
+                : resumedSameExecution
+                  ? 'Guidance saved. The coding workflow is resuming in its existing workspace.'
+                  : 'Guidance saved. A fresh execution is starting with the saved guidance.';
       toast('success', message);
       await load(true);
     } catch (e) {
@@ -1629,7 +1667,7 @@ function TaskDetail() {
     <label className="grid gap-1 text-xs font-semibold text-muted">
       {title}
       <textarea
-        className="min-h-24 rounded-xl border border-line bg-canvas p-3 text-sm font-normal text-zinc-100 outline-none focus:border-mint"
+        className="min-h-24 rounded-xl border border-line bg-white p-3 text-sm font-normal text-slate-800 outline-none focus:border-primary"
         value={planDraft?.[field].join('\n') || ''}
         onChange={(event) =>
           setPlanDraft((current) =>
@@ -1660,7 +1698,7 @@ function TaskDetail() {
   );
   return (
     <>
-      <Link to="/tasks" className="mb-5 inline-block text-sm text-mint">
+      <Link to="/tasks" className="mb-5 inline-block text-sm text-primary">
         ← All tasks
       </Link>
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1695,7 +1733,7 @@ function TaskDetail() {
                 Analysis model
                 <select
                   aria-label="Analysis model"
-                  className="min-h-10 rounded-xl border border-line bg-panel px-3 text-sm text-zinc-100"
+                  className="min-h-10 rounded-xl border border-line bg-white px-3 text-sm text-slate-800"
                   value={analysisModel}
                   disabled={busy || role === 'viewer'}
                   onChange={(event) => setAnalysisModel(event.target.value)}
@@ -1718,7 +1756,7 @@ function TaskDetail() {
               Coding model
               <select
                 aria-label="Coding model"
-                className="min-h-10 rounded-xl border border-line bg-panel px-3 text-sm text-zinc-100"
+                className="min-h-10 rounded-xl border border-line bg-white px-3 text-sm text-slate-800"
                 value={codingModel}
                 disabled={busy || role === 'viewer'}
                 onChange={(event) => setCodingModel(event.target.value)}
@@ -1777,12 +1815,12 @@ function TaskDetail() {
               Create pull request
             </Button>
           )}
-          {['BACKLOG', 'FAILED'].includes(task.status) &&
+          {!['IN_PROGRESS', 'VALIDATING'].includes(task.status) &&
             (role === 'operator' || role === 'admin') && (
               <Button
                 loading={busy}
                 variant="secondary"
-                className="text-rose-300 hover:border-rose-400/50 hover:bg-rose-950/30"
+                className="text-red-600 hover:border-red-300 hover:bg-red-50"
                 onClick={() => void removeTask()}
               >
                 <Trash2 size={15} />
@@ -1792,7 +1830,7 @@ function TaskDetail() {
         </div>
       </div>
       {task.status === 'AWAITING_APPROVAL' && (
-        <Panel className="mt-5 border border-amber-400/30 p-5">
+        <Panel className="mt-5 border border-amber-300 p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-display text-lg font-semibold">
@@ -1813,11 +1851,11 @@ function TaskDetail() {
           )}
           {role === 'admin' ? (
             <>
-              <label className="mt-4 grid gap-2 text-sm font-medium text-zinc-200">
+              <label className="mt-4 grid gap-2 text-sm font-medium text-slate-800">
                 Decision reason
                 <textarea
                   aria-label="Approval decision reason"
-                  className="min-h-20 rounded-xl border border-line bg-canvas p-3 text-sm font-normal outline-none focus:border-mint"
+                  className="min-h-20 rounded-xl border border-line bg-white p-3 text-sm font-normal outline-none focus:border-primary"
                   maxLength={2000}
                   value={approvalReason}
                   onChange={(event) => setApprovalReason(event.target.value)}
@@ -1852,7 +1890,7 @@ function TaskDetail() {
       )}
       {['AWAITING_INPUT', 'BLOCKED'].includes(task.status) &&
         task.pending_question && (
-          <Panel className="mt-5 border border-amber-400/30 p-5">
+          <Panel className="mt-5 border border-amber-300 p-5">
             <h2 className="font-display text-lg font-semibold">
               Operator input needed
             </h2>
@@ -1864,14 +1902,14 @@ function TaskDetail() {
                 className="mt-4 grid gap-3"
                 onSubmit={(event) => void submitHumanAnswer(event)}
               >
-                <label className="grid gap-2 text-sm font-medium text-zinc-200">
+                <label className="grid gap-2 text-sm font-medium text-slate-800">
                   Guidance for the next attempt
                   <textarea
                     required
                     maxLength={4000}
                     value={humanAnswer}
                     onChange={(event) => setHumanAnswer(event.target.value)}
-                    className="min-h-28 rounded-xl border border-line bg-canvas p-3 text-sm font-normal outline-none focus:border-mint"
+                    className="min-h-28 rounded-xl border border-line bg-white p-3 text-sm font-normal outline-none focus:border-primary"
                     placeholder="Explain what should change or what the agent should inspect."
                   />
                 </label>
@@ -1882,6 +1920,73 @@ function TaskDetail() {
                 </div>
               </form>
             )}
+          </Panel>
+        )}
+      {['APPROVED', 'PR_CREATED'].includes(task.status) &&
+        role !== 'viewer' && (
+          <Panel className="mt-5 border border-primary/30 p-5">
+            <h2 className="font-display text-lg font-semibold">
+              {task.status === 'PR_CREATED'
+                ? 'Request another patch on this pull request'
+                : 'Request another patch before publishing'}
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+              {task.status === 'PR_CREATED'
+                ? 'Tested the pull request manually and found an issue, or need something added? Ask for a fix or provide more information. The task reopens, the planner runs again with your instructions, and after validation and approval the new patch is pushed to this same pull request.'
+                : 'Something needs to change before the pull request is published, or the publication needs to run again? Ask for a fix or provide more information. The task reopens, the planner runs again with your instructions, and the new patch goes through validation and approval before it is published to this task’s pull request.'}
+            </p>
+            <form
+              className="mt-4 grid gap-3"
+              onSubmit={(event) => void submitHumanAnswer(event, followUpKind)}
+            >
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant={
+                    followUpKind === 'fix_request' ? 'primary' : 'secondary'
+                  }
+                  onClick={() => setFollowUpKind('fix_request')}
+                >
+                  <Wrench size={15} />
+                  Ask for a fix
+                </Button>
+                <Button
+                  type="button"
+                  variant={
+                    followUpKind === 'more_info' ? 'primary' : 'secondary'
+                  }
+                  onClick={() => setFollowUpKind('more_info')}
+                >
+                  <Info size={15} />
+                  Provide more info
+                </Button>
+              </div>
+              <label className="grid gap-2 text-sm font-medium text-slate-800">
+                {followUpKind === 'fix_request'
+                  ? 'What should be fixed?'
+                  : 'Additional information for the planner'}
+                <textarea
+                  required
+                  maxLength={4000}
+                  value={humanAnswer}
+                  onChange={(event) => setHumanAnswer(event.target.value)}
+                  className="min-h-28 rounded-xl border border-line bg-white p-3 text-sm font-normal outline-none focus:border-primary"
+                  placeholder={
+                    followUpKind === 'fix_request'
+                      ? task.status === 'PR_CREATED'
+                        ? 'Describe the problem you saw during manual testing and the correct behavior.'
+                        : 'Describe the problem and the correct behavior.'
+                      : 'Add context, constraints, or details the planner should consider.'
+                  }
+                />
+              </label>
+              <div>
+                <Button loading={busy} disabled={!humanAnswer.trim()}>
+                  <RefreshCw size={15} />
+                  Re-run task with new instructions
+                </Button>
+              </div>
+            </form>
           </Panel>
         )}
       {['READY', 'HUMAN_QUEUE'].includes(task.status) && role !== 'viewer' && (
@@ -1900,14 +2005,14 @@ function TaskDetail() {
               </p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:min-w-[460px]">
-              <label className="grid gap-2 text-sm font-medium text-zinc-200">
+              <label className="grid gap-2 text-sm font-medium text-slate-800">
                 Risk assessment
                 <select
                   value={pendingRisk ?? task.risk ?? 'MEDIUM'}
                   onChange={(event) =>
                     setPendingRisk(event.target.value as Risk)
                   }
-                  className="min-h-11 rounded-xl border border-line bg-canvas px-3 text-sm outline-none focus:border-mint"
+                  className="min-h-11 rounded-xl border border-line bg-white px-3 text-sm outline-none focus:border-primary"
                 >
                   {(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const).map(
                     (risk) => (
@@ -1918,7 +2023,7 @@ function TaskDetail() {
                   )}
                 </select>
               </label>
-              <div className="grid gap-2 text-sm font-medium text-zinc-200">
+              <div className="grid gap-2 text-sm font-medium text-slate-800">
                 Execution mode
                 <div
                   className="flex flex-wrap gap-2"
@@ -1942,7 +2047,7 @@ function TaskDetail() {
                 </div>
               </div>
               {(pendingRisk ?? task.risk) !== task.risk && (
-                <label className="grid gap-2 text-sm font-medium text-zinc-200 sm:col-span-2">
+                <label className="grid gap-2 text-sm font-medium text-slate-800 sm:col-span-2">
                   Reason for changing risk
                   <textarea
                     required
@@ -1950,7 +2055,7 @@ function TaskDetail() {
                     value={riskReason}
                     onChange={(event) => setRiskReason(event.target.value)}
                     placeholder="Explain the evidence behind this risk reassessment."
-                    className="min-h-20 rounded-xl border border-line bg-canvas px-3 py-2 text-sm outline-none focus:border-mint"
+                    className="min-h-20 rounded-xl border border-line bg-white px-3 py-2 text-sm outline-none focus:border-primary"
                   />
                 </label>
               )}
@@ -1977,7 +2082,7 @@ function TaskDetail() {
         <div className="grid content-start gap-5">
           <Panel className="p-5">
             <h2 className="font-display text-lg font-semibold">Task brief</h2>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-600">
               {task.description}
             </p>
             <p className="mt-4 text-xs text-muted">
@@ -1987,14 +2092,14 @@ function TaskDetail() {
           <Panel className="p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <Paperclip size={17} className="text-mint" />
+                <Paperclip size={17} className="text-primary" />
                 <h2 className="font-display text-lg font-semibold">
                   Task attachments
                 </h2>
                 <Badge>{task.attachments?.length || 0}</Badge>
               </div>
               {role !== 'viewer' && (task.attachments?.length || 0) < 10 && (
-                <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border border-line bg-elevated px-4 text-sm font-semibold hover:border-zinc-500">
+                <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border border-line bg-elevated px-4 text-sm font-semibold hover:border-slate-300">
                   <Paperclip size={15} />
                   Add files
                   <input
@@ -2034,7 +2139,7 @@ function TaskDetail() {
                     </div>
                     <button
                       aria-label={`Download ${attachment.filename}`}
-                      className="rounded-lg p-2 text-muted hover:bg-elevated hover:text-mint"
+                      className="rounded-lg p-2 text-muted hover:bg-elevated hover:text-primary"
                       onClick={() =>
                         void saveAttachment(attachment.id, attachment.filename)
                       }
@@ -2045,7 +2150,7 @@ function TaskDetail() {
                       <button
                         aria-label={`Remove ${attachment.filename}`}
                         disabled={attachmentBusy}
-                        className="rounded-lg p-2 text-muted hover:bg-elevated hover:text-rose-300"
+                        className="rounded-lg p-2 text-muted hover:bg-elevated hover:text-red-600"
                         onClick={() => void removeAttachment(attachment.id)}
                       >
                         <Trash2 size={16} />
@@ -2062,7 +2167,7 @@ function TaskDetail() {
             <Panel className="p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <Sparkles size={17} className="text-mint" />
+                  <Sparkles size={17} className="text-primary" />
                   <h2 className="font-display text-lg font-semibold">
                     Analysis plan
                   </h2>
@@ -2097,7 +2202,7 @@ function TaskDetail() {
                   <label className="grid gap-1 text-xs font-semibold text-muted">
                     Plan rationale
                     <textarea
-                      className="min-h-24 rounded-xl border border-line bg-canvas p-3 text-sm font-normal text-zinc-100 outline-none focus:border-mint"
+                      className="min-h-24 rounded-xl border border-line bg-white p-3 text-sm font-normal text-slate-800 outline-none focus:border-primary"
                       value={planDraft.reason}
                       onChange={(event) =>
                         setPlanDraft({
@@ -2111,7 +2216,7 @@ function TaskDetail() {
                     <label className="grid gap-1 text-xs font-semibold text-muted">
                       Risk
                       <select
-                        className="rounded-xl border border-line bg-canvas p-3 text-sm text-zinc-100"
+                        className="rounded-xl border border-line bg-white p-3 text-sm text-slate-800"
                         value={planDraft.risk}
                         onChange={(event) =>
                           setPlanDraft({
@@ -2128,7 +2233,7 @@ function TaskDetail() {
                     <label className="grid gap-1 text-xs font-semibold text-muted">
                       Complexity
                       <select
-                        className="rounded-xl border border-line bg-canvas p-3 text-sm text-zinc-100"
+                        className="rounded-xl border border-line bg-white p-3 text-sm text-slate-800"
                         value={planDraft.complexity}
                         onChange={(event) =>
                           setPlanDraft({
@@ -2146,7 +2251,7 @@ function TaskDetail() {
                     <label className="grid gap-1 text-xs font-semibold text-muted">
                       Execution mode
                       <select
-                        className="rounded-xl border border-line bg-canvas p-3 text-sm text-zinc-100"
+                        className="rounded-xl border border-line bg-white p-3 text-sm text-slate-800"
                         value={planDraft.mode}
                         onChange={(event) =>
                           setPlanDraft({
@@ -2161,7 +2266,7 @@ function TaskDetail() {
                       </select>
                     </label>
                   </div>
-                  <label className="flex items-center gap-2 text-sm text-zinc-200">
+                  <label className="flex items-center gap-2 text-sm text-slate-800">
                     <input
                       type="checkbox"
                       checked={planDraft.approval_required}
@@ -2210,7 +2315,7 @@ function TaskDetail() {
                   </p>
                 </div>
               )}
-              <p className="mt-3 text-sm leading-6 text-zinc-300">
+              <p className="mt-3 text-sm leading-6 text-slate-600">
                 {task.execution_plan.reason}
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -2247,7 +2352,7 @@ function TaskDetail() {
               <ol className="mt-4 grid gap-2">
                 {task.execution_plan.steps.map((step, i) => (
                   <li key={`${i}-${step}`} className="flex gap-3 text-sm">
-                    <span className="text-mint">
+                    <span className="text-primary">
                       {String(i + 1).padStart(2, '0')}
                     </span>
                     <span>{step}</span>
@@ -2264,7 +2369,7 @@ function TaskDetail() {
                   <p className="text-xs font-semibold text-muted">
                     EXPECTED FILES OR AREAS
                   </p>
-                  <ul className="mt-2 grid gap-1 text-sm text-zinc-300">
+                  <ul className="mt-2 grid gap-1 text-sm text-slate-600">
                     {task.execution_plan.expected_files_or_areas.map((item) => (
                       <li key={item}>{item}</li>
                     ))}
@@ -2276,7 +2381,7 @@ function TaskDetail() {
                   <p className="text-xs font-semibold text-muted">
                     PLANNED VALIDATION
                   </p>
-                  <ul className="mt-2 grid gap-1 text-sm text-zinc-300">
+                  <ul className="mt-2 grid gap-1 text-sm text-slate-600">
                     {task.execution_plan.validation_plan.map((item) => (
                       <li key={item}>{item}</li>
                     ))}
@@ -2284,11 +2389,11 @@ function TaskDetail() {
                 </div>
               )}
               {task.execution_plan.potential_concerns.length > 0 && (
-                <div className="mt-4 rounded-lg border border-amber-800/60 bg-amber-950/20 p-3">
-                  <p className="text-xs font-semibold text-amber-200">
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-semibold text-amber-800">
                     PLAN CONCERNS
                   </p>
-                  <ul className="mt-2 grid gap-1 text-sm text-amber-100/80">
+                  <ul className="mt-2 grid gap-1 text-sm text-amber-800">
                     {task.execution_plan.potential_concerns.map((item) => (
                       <li key={item}>{item}</li>
                     ))}
@@ -2315,7 +2420,7 @@ function TaskDetail() {
                   <div className="rounded-xl border border-line bg-elevated/40 p-4 text-sm">
                     <p className="font-semibold">Workspace and patch</p>
                     {latest.branch_reference && (
-                      <p className="mt-2 break-all text-zinc-300">
+                      <p className="mt-2 break-all text-slate-600">
                         Branch: <code>{latest.branch_reference}</code>
                       </p>
                     )}
@@ -2340,7 +2445,7 @@ function TaskDetail() {
                 {latest.patch_fingerprint && (
                   <div>
                     <button
-                      className="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-mint hover:bg-elevated disabled:opacity-60"
+                      className="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-primary hover:bg-elevated disabled:opacity-60"
                       disabled={patchPreviewLoading}
                       onClick={() => void showPatch(latest.id)}
                       type="button"
@@ -2350,7 +2455,7 @@ function TaskDetail() {
                         : 'View code patch'}
                     </button>
                     {patchPreviewError && patchPreviewTarget === latest.id && (
-                      <p className="mt-2 text-xs text-rose-200">
+                      <p className="mt-2 text-xs text-red-600">
                         Patch preview unavailable: {patchPreviewError}
                       </p>
                     )}
@@ -2372,7 +2477,7 @@ function TaskDetail() {
                             Commit: <code>{patchPreview.commit_sha}</code>
                           </p>
                         )}
-                        <pre className="mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-[11px] leading-5 text-zinc-200">
+                        <pre className="mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-800">
                           {patchPreview.diff || 'No textual diff is available.'}
                         </pre>
                       </details>
@@ -2381,11 +2486,11 @@ function TaskDetail() {
                 )}
                 {latest.error_details &&
                 ['FAILED', 'BLOCKED', 'CANCELLED'].includes(latest.status) ? (
-                  <div className="rounded-xl border border-rose-800/70 bg-rose-950/30 p-4">
-                    <p className="text-sm font-semibold text-rose-200">
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                    <p className="text-sm font-semibold text-red-600">
                       Execution failed
                     </p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-rose-100/90">
+                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-red-700">
                       {latest.error_details}
                     </p>
                   </div>
@@ -2421,7 +2526,7 @@ function TaskDetail() {
                 <div className="grid gap-3 md:grid-cols-2">
                   {validation && (
                     <div
-                      className={`rounded-xl border p-4 ${staleValidation ? 'border-amber-800 bg-amber-950/20' : 'border-line bg-elevated/50'}`}
+                      className={`rounded-xl border p-4 ${staleValidation ? 'border-amber-300 bg-amber-50' : 'border-line bg-elevated/50'}`}
                     >
                       <div className="flex justify-between">
                         <span className="font-semibold">Validation</span>
@@ -2454,7 +2559,7 @@ function TaskDetail() {
                             </p>
                           )}
                           {cmd.error && (
-                            <p className="mt-2 whitespace-pre-wrap text-xs text-rose-200">
+                            <p className="mt-2 whitespace-pre-wrap text-xs text-red-600">
                               {cmd.error}
                             </p>
                           )}
@@ -2471,12 +2576,12 @@ function TaskDetail() {
                                 </p>
                               )}
                               {cmd.stdout_excerpt && (
-                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-black/20 p-2">
+                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-2">
                                   stdout: {cmd.stdout_excerpt}
                                 </pre>
                               )}
                               {cmd.stderr_excerpt && (
-                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-black/20 p-2">
+                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-2">
                                   stderr: {cmd.stderr_excerpt}
                                 </pre>
                               )}
@@ -2488,7 +2593,7 @@ function TaskDetail() {
                   )}
                   {security && (
                     <div
-                      className={`rounded-xl border p-4 ${staleSecurity ? 'border-amber-800 bg-amber-950/20' : 'border-line bg-elevated/50'}`}
+                      className={`rounded-xl border p-4 ${staleSecurity ? 'border-amber-300 bg-amber-50' : 'border-line bg-elevated/50'}`}
                     >
                       <div className="flex justify-between">
                         <span className="font-semibold">Security review</span>
@@ -2506,7 +2611,7 @@ function TaskDetail() {
                           className="mt-3 rounded-lg border border-line p-3"
                           key={index}
                         >
-                          <p className="text-xs font-semibold text-rose-200">
+                          <p className="text-xs font-semibold text-red-600">
                             {finding.severity}: {finding.explanation}
                           </p>
                           <p className="mt-1 text-xs text-muted">
@@ -2514,10 +2619,10 @@ function TaskDetail() {
                             {finding.line ? `:${finding.line}` : ''} ·{' '}
                             {label(finding.source)}
                           </p>
-                          <p className="mt-2 whitespace-pre-wrap text-xs text-zinc-300">
+                          <p className="mt-2 whitespace-pre-wrap text-xs text-slate-600">
                             Evidence: {finding.evidence}
                           </p>
-                          <p className="mt-2 whitespace-pre-wrap text-xs text-zinc-300">
+                          <p className="mt-2 whitespace-pre-wrap text-xs text-slate-600">
                             Suggested remediation: {finding.remediation}
                           </p>
                         </div>
@@ -2540,7 +2645,7 @@ function TaskDetail() {
                     </p>
                     {pr.pr_url && (
                       <a
-                        className="mt-2 inline-block text-sm text-mint underline"
+                        className="mt-2 inline-block text-sm text-primary underline"
                         href={pr.pr_url}
                         target="_blank"
                         rel="noreferrer"
@@ -2566,7 +2671,7 @@ function TaskDetail() {
                         <p>Merged: {new Date(pr.merged_at).toLocaleString()}</p>
                       )}
                       {pr.error_details && (
-                        <p className="whitespace-pre-wrap text-rose-200">
+                        <p className="whitespace-pre-wrap text-red-600">
                           Publication error: {pr.error_details}
                         </p>
                       )}
@@ -2603,7 +2708,7 @@ function TaskDetail() {
                               {fullDate(decision.decided_at)}
                             </span>
                           </div>
-                          <p className="mt-2 text-xs leading-5 text-zinc-300">
+                          <p className="mt-2 text-xs leading-5 text-slate-600">
                             {decision.reason}
                           </p>
                         </div>
@@ -2649,18 +2754,18 @@ function TaskDetail() {
                             </p>
                           )}
                           {execution.patch_summary && (
-                            <p className="mt-2 text-xs text-zinc-300">
+                            <p className="mt-2 text-xs text-slate-600">
                               {execution.patch_summary}
                             </p>
                           )}
                           {execution.error_details && (
-                            <p className="mt-2 whitespace-pre-wrap text-xs text-rose-200">
+                            <p className="mt-2 whitespace-pre-wrap text-xs text-red-600">
                               {execution.error_details}
                             </p>
                           )}
                           {execution.patch_fingerprint && (
                             <button
-                              className="mt-2 text-xs font-semibold text-mint hover:underline"
+                              className="mt-2 text-xs font-semibold text-primary hover:underline"
                               disabled={patchPreviewLoading}
                               onClick={() => void showPatch(execution.id)}
                               type="button"
@@ -2670,7 +2775,7 @@ function TaskDetail() {
                           )}
                           {patchPreviewError &&
                             patchPreviewTarget === execution.id && (
-                              <p className="mt-2 text-xs text-rose-200">
+                              <p className="mt-2 text-xs text-red-600">
                                 {patchPreviewError}
                               </p>
                             )}
@@ -2703,7 +2808,7 @@ function TaskDetail() {
           </Panel>
           <Panel className="p-5">
             <div className="flex flex-wrap items-center gap-2">
-              <ActivityIcon size={17} className="text-mint" />
+              <ActivityIcon size={17} className="text-primary" />
               <h2 className="font-display text-lg font-semibold">
                 Execution log
               </h2>
@@ -2713,7 +2818,7 @@ function TaskDetail() {
                 </Badge>
               )}
               {executionIsLive && (
-                <span className="ml-auto text-xs text-mint">
+                <span className="ml-auto text-xs text-primary">
                   Live · refreshes every 5 seconds
                 </span>
               )}
@@ -2726,7 +2831,7 @@ function TaskDetail() {
                 {executionEvents.map((event) => (
                   <li key={event.id} className="flex gap-3 py-3 first:pt-0">
                     <span
-                      className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${/failed|blocked|rejected/i.test(event.event_type) ? 'bg-rose-400' : 'bg-mint'}`}
+                      className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${/failed|blocked|rejected/i.test(event.event_type) ? 'bg-red-500' : 'bg-primary'}`}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
@@ -2743,7 +2848,7 @@ function TaskDetail() {
                       {Object.keys(event.metadata).length > 0 && (
                         <details className="mt-2 text-xs text-muted">
                           <summary className="cursor-pointer">Details</summary>
-                          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-elevated p-3 font-mono text-[11px] leading-5 text-zinc-300">
+                          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-elevated p-3 font-mono text-[11px] leading-5 text-slate-600">
                             {JSON.stringify(event.metadata, null, 2)}
                           </pre>
                         </details>
@@ -2762,7 +2867,7 @@ function TaskDetail() {
           </Panel>
           <Panel className="p-5">
             <div className="flex items-center gap-2">
-              <ActivityIcon size={17} className="text-mint" />
+              <ActivityIcon size={17} className="text-primary" />
               <h2 className="font-display text-lg font-semibold">Activity</h2>
             </div>
             <div className="mt-4">
@@ -2781,7 +2886,7 @@ function TaskDetail() {
           </Panel>
           <Panel className="p-5">
             <div className="flex items-center gap-2">
-              <ActivityIcon size={17} className="text-mint" />
+              <ActivityIcon size={17} className="text-primary" />
               <h2 className="font-display text-lg font-semibold">
                 Status history
               </h2>
@@ -2810,7 +2915,7 @@ function TaskDetail() {
                           {fullDate(transition.at)}
                         </span>
                       </div>
-                      <p className="mt-2 text-sm text-zinc-300">
+                      <p className="mt-2 text-sm text-slate-600">
                         {transition.reason}
                       </p>
                       <p className="mt-1 text-xs text-muted">

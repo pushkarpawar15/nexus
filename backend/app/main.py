@@ -914,20 +914,34 @@ def create_app(
     @app.delete("/api/tasks/{task_id}", status_code=204)
     async def delete_task(task_id: str, user: UserIdentity = Depends(require_operator)) -> None:
         task = await get_task_or_404(task_id, user)
-        if task.status not in {TaskStatus.BACKLOG, TaskStatus.FAILED}:
+        if task.status in {TaskStatus.IN_PROGRESS, TaskStatus.VALIDATING}:
             raise NexusError(
                 ErrorCode.DELETION_NOT_ALLOWED,
-                "Only BACKLOG or FAILED tasks can be deleted.",
+                "Tasks in progress or validating cannot be deleted.",
                 status_code=409,
             )
         try:
-            await task_repository.delete(task.id, expected_updated_at=task.updated_at)
-            for attachment in task.attachments:
-                await app.state.attachment_storage.delete(attachment.storage_key)
+            deleted = await task_repository.delete(task.id, expected_updated_at=task.updated_at)
         except RuntimeError as exc:
             raise NexusError(
                 ErrorCode.TASK_CONFLICT, "Task changed during this request.", status_code=409
             ) from exc
+        if not deleted:
+            raise NexusError(
+                ErrorCode.TASK_CONFLICT, "Task changed during this request.", status_code=409
+            )
+        import logging
+
+        for attachment in task.attachments:
+            try:
+                await app.state.attachment_storage.delete(attachment.storage_key)
+            except Exception as exc:  # pragma: no cover - storage cleanup is best effort
+                logging.getLogger("nexus.api").warning(
+                    "Attachment cleanup failed for %s while deleting task %s: %s",
+                    attachment.storage_key,
+                    task.id,
+                    exc,
+                )
 
     @app.post("/api/tasks/{task_id}/transitions", response_model=Task)
     async def transition_task(
@@ -1017,12 +1031,28 @@ def create_app(
         user: UserIdentity = Depends(require_operator),
     ):
         task = await get_task_or_404(task_id, user)
-        if task.status == TaskStatus.AWAITING_INPUT and task.pending_execution_id is None:
+        request_status = task.status
+        if (
+            task.status
+            in {
+                TaskStatus.AWAITING_INPUT,
+                TaskStatus.APPROVED,
+                TaskStatus.PR_CREATED,
+                TaskStatus.COMPLETED,
+            }
+            and task.pending_execution_id is None
+        ):
+            safe_answer = redact_credentials(request.answer.strip())
+            follow_up_prefix = {
+                "more_info": "Follow-up (more information):",
+                "fix_request": "Follow-up (fix requested):",
+            }.get(request.follow_up)
+            answer = f"{follow_up_prefix} {safe_answer}" if follow_up_prefix else safe_answer
             guidance = "\n\n".join(
                 value
                 for value in (
                     task.human_guidance,
-                    redact_credentials(request.answer.strip()),
+                    answer,
                 )
                 if value
             )[-8000:]
@@ -1037,6 +1067,9 @@ def create_app(
                     "Task changed while operator guidance was being submitted.",
                     status_code=409,
                 ) from exc
+            metadata: dict = {"guidance": safe_answer}
+            if request.follow_up:
+                metadata["follow_up"] = request.follow_up
             await workflow_repositories.activity_events.create(
                 ActivityEvent(
                     id=uuid4().hex,
@@ -1044,10 +1077,25 @@ def create_app(
                     execution_id=None,
                     worker_name=user.uid,
                     event_type="human.input_received",
-                    message="Operator clarification was saved and sent to the planner.",
+                    message=(
+                        "Follow-up guidance was saved and sent to the planner for a "
+                        "new patch on the existing pull request."
+                        if request_status == TaskStatus.PR_CREATED
+                        else (
+                            "Follow-up guidance was saved and sent to the planner "
+                            "for a new patch before the pull request is created."
+                            if request_status == TaskStatus.APPROVED
+                            else (
+                                "Follow-up guidance for the completed task was saved "
+                                "and sent to the planner for re-analysis."
+                                if request_status == TaskStatus.COMPLETED
+                                else "Operator clarification was saved and sent to the planner."
+                            )
+                        )
+                    ),
                     occurred_at=datetime.now(timezone.utc),
                     source=ActivitySource.SYSTEM,
-                    metadata={"guidance": redact_credentials(request.answer.strip())},
+                    metadata=metadata,
                 )
             )
             target = await repository_target_for_user(user, updated.repository_key)

@@ -21,6 +21,7 @@ from app.repositories.records import WorkflowRepositories
 from app.repositories.skills import MemorySkillRepository, SkillRepository
 from app.repositories.tasks import TaskRepository
 from app.schemas.execution import ActivityEvent, ActivitySource, ExecutionStatus
+from app.schemas.pull_request import PullRequestStatus
 from app.schemas.security import SecurityStatus
 from app.schemas.validation import ValidationStatus
 from app.services.coding_agent import CodingAgent
@@ -269,6 +270,22 @@ class ExecutionPipeline:
                 workspace_settings = self.settings.model_copy(
                     update={"github_token": SecretStr(token)}
                 )
+            # A follow-up execution reuses the branch of the task's latest pull
+            # request record so the new patch updates the same pull request
+            # instead of opening a second one. Records at PREPARING/COMMITTED/
+            # PUSHED come from a publication that failed mid-way (e.g. a push
+            # error), and their branch must be reused as well; MERGED records
+            # are excluded so a fresh branch is used after a merge.
+            follow_up_branch = None
+            reusable_records = [
+                record
+                for record in await self.records.pull_requests.list_for_task(task.id)
+                if record.status != PullRequestStatus.MERGED and record.branch_name
+            ]
+            if reusable_records:
+                follow_up_branch = max(
+                    reusable_records, key=lambda record: record.updated_at
+                ).branch_name
             workspace_job = asyncio.create_task(
                 asyncio.to_thread(
                     create_workspace,
@@ -276,6 +293,7 @@ class ExecutionPipeline:
                     target,
                     task.id,
                     execution.id,
+                    branch_name=follow_up_branch,
                     stop_event=workspace_stop,
                 )
             )

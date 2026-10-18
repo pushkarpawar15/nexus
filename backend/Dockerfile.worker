@@ -6,6 +6,15 @@ RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates git libatomic1 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
+# The Antigravity harness embeds a ripgrep linked against Google's internal
+# loader path (/usr/grte/v5/lib64/ld-linux-x86-64.so.2). Without that path the
+# embedded binary cannot exec in this image, so every search_directory call
+# falls back to slow GNU grep, which repeatedly pushed Antigravity project
+# discovery past its stage timeout. Debian's glibc satisfies the binary's
+# symbol requirements; only the loader path is missing.
+RUN mkdir -p /usr/grte/v5/lib64 \
+    && ln -s /lib64/ld-linux-x86-64.so.2 /usr/grte/v5/lib64/ld-linux-x86-64.so.2
+
 COPY --from=node-runtime /usr/local/ /usr/local/
 RUN node --version && npm --version
 

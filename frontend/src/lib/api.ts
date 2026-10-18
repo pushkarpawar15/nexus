@@ -326,10 +326,13 @@ export const answerWorkflowQuestion = (
   u: User | null,
   taskId: string,
   answer: string,
+  followUp?: 'more_info' | 'fix_request',
 ) =>
   request<Execution | Task>(u, `/api/tasks/${id(taskId)}/input`, {
     method: 'POST',
-    body: JSON.stringify({ answer }),
+    body: JSON.stringify(
+      followUp ? { answer, follow_up: followUp } : { answer },
+    ),
   });
 export const stopExecution = (
   u: User | null,

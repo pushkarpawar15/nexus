@@ -101,6 +101,8 @@ class MemoryTaskRepository:
             current = self._tasks.get(task_id)
             if current is None:
                 return False
+            if current.status in (TaskStatus.IN_PROGRESS, TaskStatus.VALIDATING):
+                return False
             if current.updated_at != expected_updated_at:
                 raise RuntimeError("task changed concurrently")
             del self._tasks[task_id]
@@ -207,6 +209,8 @@ class FirestoreTaskRepository:
             if not snapshot.exists:
                 return
             current = Task.model_validate(snapshot.to_dict())
+            if current.status in (TaskStatus.IN_PROGRESS, TaskStatus.VALIDATING):
+                return
             if current.updated_at != expected_updated_at:
                 raise RuntimeError("task changed concurrently")
             transaction.delete(reference)

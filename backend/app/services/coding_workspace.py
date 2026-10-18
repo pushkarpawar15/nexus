@@ -198,6 +198,7 @@ def create_workspace(
     task_id: str,
     execution_id: str,
     *,
+    branch_name: str | None = None,
     stop_event: threading.Event | None = None,
 ) -> CodingWorkspace:
     if settings.workspace_root is None:
@@ -239,7 +240,9 @@ def create_workspace(
         )
     safe_task = re.sub(r"[^a-zA-Z0-9-]", "-", task_id)[:24]
     safe_execution = re.sub(r"[^a-zA-Z0-9-]", "-", execution_id)[:24]
-    branch = f"nexus/task-{safe_task}-{safe_execution}"
+    branch = branch_name or f"nexus/task-{safe_task}-{safe_execution}"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,249}", branch):
+        raise CodingWorkspaceError("Requested follow-up branch name is unsafe.")
     destination = root / f"execution-{safe_execution}"
     if destination.exists() or destination.is_symlink():
         raise CodingWorkspaceError("Execution workspace already exists.")

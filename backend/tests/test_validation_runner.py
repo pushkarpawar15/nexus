@@ -7,6 +7,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from google.antigravity import types
@@ -16,10 +17,15 @@ from google.antigravity.hooks.policy import enforce
 from app.core.config import Settings
 from app.integrations import validation_runner
 from app.integrations.validation_runner import (
+    CHECKS_MAX_TOOL_CALLS,
+    DISCOVERY_MAX_MODEL_CALLS,
+    DISCOVERY_MAX_TOOL_CALLS,
+    MODEL_API_MAX_RETRIES,
     AgentPreparationPlan,
     AgentValidationCheck,
     AgentValidationOutput,
     AntigravityValidationRunner,
+    _request_preparation_plan,
     _request_validation_output,
     _run_isolated_antigravity_call,
     compute_patch_fingerprint,
@@ -166,6 +172,184 @@ def test_missing_antigravity_structured_output_returns_clear_error() -> None:
     asyncio.run(run())
 
 
+def test_missing_antigravity_preparation_plan_retries_once() -> None:
+    class FakeResponse:
+        def __init__(self, structured):
+            self.structured = structured
+
+        async def resolve(self):
+            return []
+
+        async def structured_output(self):
+            return self.structured
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+            self.responses = [
+                FakeResponse(None),
+                FakeResponse({"summary": "One project.", "projects": []}),
+            ]
+
+        async def chat(self, prompt):
+            self.prompts.append(prompt)
+            return self.responses.pop(0)
+
+    async def run() -> None:
+        agent = FakeAgent()
+        plan = await _request_preparation_plan(agent, "inspect workspace manifests")
+        assert plan.summary == "One project."
+        assert len(agent.prompts) == 2
+        assert "structured project setup plan" in agent.prompts[1]
+
+    asyncio.run(run())
+
+
+def test_missing_antigravity_preparation_plan_returns_clear_error() -> None:
+    class FakeResponse:
+        stop_reason = "MAX_TOOL_CALLS_EXCEEDED"
+
+        async def resolve(self):
+            return []
+
+        async def structured_output(self):
+            return None
+
+    class FakeAgent:
+        async def chat(self, _prompt):
+            return FakeResponse()
+
+    async def run() -> None:
+        with pytest.raises(
+            RuntimeError,
+            match="discovery ended without a structured setup plan after one retry",
+        ):
+            await _request_preparation_plan(FakeAgent(), "inspect workspace manifests")
+
+    asyncio.run(run())
+
+
+def test_project_discovery_config_bounds_budget_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import google.antigravity as real_antigravity
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        async def resolve(self):
+            return []
+
+        async def structured_output(self):
+            return {"summary": "Inventoried the manifests.", "projects": []}
+
+    class FakeAgent:
+        sandbox_status = SimpleNamespace(available=True, unavailable_reason=None)
+
+        def __init__(self, config):
+            captured["agent_config"] = config
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def chat(self, _content):
+            return FakeResponse()
+
+    class FakeLocalAgentConfig:
+        def __init__(self, **kwargs):
+            captured["config"] = kwargs
+
+    fake_sdk = ModuleType("google.antigravity")
+    fake_sdk.Agent = FakeAgent
+    fake_sdk.LocalAgentConfig = FakeLocalAgentConfig
+    fake_sdk.types = real_antigravity.types
+    monkeypatch.setitem(sys.modules, "google.antigravity", fake_sdk)
+
+    task, execution = records()
+    runner = AntigravityValidationRunner(
+        Settings(
+            _env_file=None,
+            environment="testing",
+            storage="memory",
+            google_cloud_project="demo-nexus",
+        )
+    )
+
+    plan = asyncio.run(runner._discover_project_setups_with_sdk(task, execution, tmp_path))
+
+    assert plan.summary == "Inventoried the manifests."
+    config = captured["config"]
+    assert config["budget_config"].max_tool_calls == DISCOVERY_MAX_TOOL_CALLS
+    assert config["budget_config"].max_model_calls == DISCOVERY_MAX_MODEL_CALLS
+    assert config["retry_config"].api_retry.max_retries == MODEL_API_MAX_RETRIES
+
+
+def test_validation_checks_config_bounds_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import google.antigravity as real_antigravity
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        async def resolve(self):
+            return []
+
+        async def structured_output(self):
+            return {
+                "outcome": "NO_CHECKS",
+                "summary": "No checks were applicable.",
+                "checks": [],
+            }
+
+    class FakeAgent:
+        sandbox_status = SimpleNamespace(available=True, unavailable_reason=None)
+
+        def __init__(self, config):
+            captured["agent_config"] = config
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def chat(self, _content):
+            return FakeResponse()
+
+    class FakeLocalAgentConfig:
+        def __init__(self, **kwargs):
+            captured["config"] = kwargs
+
+    fake_sdk = ModuleType("google.antigravity")
+    fake_sdk.Agent = FakeAgent
+    fake_sdk.LocalAgentConfig = FakeLocalAgentConfig
+    fake_sdk.types = real_antigravity.types
+    monkeypatch.setitem(sys.modules, "google.antigravity", fake_sdk)
+
+    task, execution = records()
+    runner = AntigravityValidationRunner(
+        Settings(
+            _env_file=None,
+            environment="testing",
+            storage="memory",
+            google_cloud_project="demo-nexus",
+        )
+    )
+
+    output, _chunks = asyncio.run(runner._ask_antigravity_with_sdk(task, execution, tmp_path))
+
+    assert output.outcome == "NO_CHECKS"
+    config = captured["config"]
+    assert config["budget_config"].max_tool_calls == CHECKS_MAX_TOOL_CALLS
+    assert config["retry_config"].api_retry.max_retries == MODEL_API_MAX_RETRIES
+
+
 def test_antigravity_startup_timeout_kills_isolated_worker_process() -> None:
     async def run() -> None:
         with pytest.raises(
@@ -217,6 +401,116 @@ def test_antigravity_timeout_is_reported_as_timed_out(tmp_path: Path) -> None:
     assert report.overall_status == ValidationStatus.BLOCKED
     assert report.commands[0].status == ValidationCommandStatus.TIMED_OUT
     assert "project discovery" in report.summary
+
+
+def test_scan_manifest_projects_finds_project_roots(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "pyproject.toml").write_text("[project]\nname = 'nexus'\n", encoding="utf-8")
+    frontend = workspace / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text('{"name": "ui"}\n', encoding="utf-8")
+    (frontend / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    ignored = workspace / "node_modules"
+    ignored.mkdir()
+    (ignored / "package.json").write_text('{"name": "dep"}\n', encoding="utf-8")
+    venv = workspace / ".venv"
+    venv.mkdir()
+    (venv / "pyproject.toml").write_text("[project]\nname = 'venv'\n", encoding="utf-8")
+
+    plan = validation_runner._scan_manifest_projects(workspace)
+
+    assert {(project.project_root, project.ecosystem) for project in plan.projects} == {
+        (".", "Python"),
+        ("frontend", "Node.js"),
+    }
+    python_roots, node_roots, inventory = AntigravityValidationRunner._validated_project_roots(
+        workspace, plan
+    )
+    assert python_roots == [workspace.resolve()]
+    assert node_roots == [frontend.resolve()]
+    assert len(inventory) == 2
+
+
+@pytest.mark.parametrize(
+    ("failure", "marker"),
+    [
+        (
+            validation_runner.AntigravityTimeoutError(
+                "Antigravity project discovery exceeded its 180-second timeout."
+            ),
+            "180-second timeout",
+        ),
+        (
+            RuntimeError("Project discovery blocked: sandbox unavailable."),
+            "sandbox unavailable",
+        ),
+    ],
+)
+def test_project_discovery_falls_back_to_manifest_scan(
+    failure: BaseException,
+    marker: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task, execution = records()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "pyproject.toml").write_text("[project]\nname = 'nexus'\n", encoding="utf-8")
+    runner = AntigravityValidationRunner(
+        Settings(_env_file=None, environment="testing", storage="memory")
+    )
+    observed: dict[str, object] = {}
+
+    async def fail(*_args, **kwargs):
+        observed.update(kwargs)
+        raise failure
+
+    monkeypatch.setattr(validation_runner, "_run_isolated_antigravity_call", fail)
+
+    plan = asyncio.run(runner._discover_project_setups(task, execution, workspace))
+
+    assert observed["stage"] == "project discovery"
+    assert observed["timeout_seconds"] == validation_runner.PROJECT_DISCOVERY_TIMEOUT_SECONDS
+    assert [project.project_root for project in plan.projects] == ["."]
+    assert "scanned directly instead" in plan.summary
+    assert marker in plan.summary
+
+
+def test_run_recovers_when_project_discovery_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task, execution = records()
+    workspace = make_workspace(tmp_path / "workspace")
+    fingerprint = compute_patch_fingerprint(workspace)
+    execution.patch_fingerprint = fingerprint
+    runner = AntigravityValidationRunner(
+        Settings(_env_file=None, environment="testing", storage="memory")
+    )
+    stages: list[str] = []
+
+    async def fake_isolated(_target, *_args, timeout_seconds, stage, **_kwargs):
+        stages.append(stage)
+        if stage == "project discovery":
+            raise validation_runner.AntigravityTimeoutError(
+                "Antigravity project discovery exceeded its 180-second timeout."
+            )
+        return (
+            AgentValidationOutput(
+                outcome="NO_CHECKS", summary="No checks were applicable.", checks=[]
+            ),
+            [],
+        )
+
+    monkeypatch.setattr(validation_runner, "_run_isolated_antigravity_call", fake_isolated)
+
+    report = runner.run(task, execution, workspace, expected_fingerprint=fingerprint)
+
+    assert stages == ["project discovery", "repository checks"]
+    assert report.overall_status == ValidationStatus.SKIPPED
+    assert "Validation skipped" in report.summary
+    assert all(command.status != ValidationCommandStatus.TIMED_OUT for command in report.commands)
 
 
 def run_with_output(

@@ -3,7 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/authState';
 import { useToast } from '../contexts/toastState';
 import { useDialogFocus } from '../hooks/useDialogFocus';
-import { createTask, listRepositories, uploadTaskAttachments } from '../lib/api';
+import {
+  createTask,
+  listRepositories,
+  uploadTaskAttachments,
+} from '../lib/api';
 import type { TaskType } from '../domain/types';
 import { Button, fieldClass } from './ui';
 export function CreateTaskDialog({
@@ -91,7 +95,7 @@ export function CreateTaskDialog({
   }
   return (
     <div
-      className="fixed inset-0 z-[70] overflow-y-auto bg-black/70 p-4"
+      className="fixed inset-0 z-[70] overflow-y-auto bg-black/40 p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div className="grid min-h-full place-items-center">
@@ -100,7 +104,7 @@ export function CreateTaskDialog({
           role="dialog"
           aria-modal="true"
           aria-labelledby="create-title"
-          className="my-5 w-full max-w-xl rounded-2xl border border-line bg-panel p-6 shadow-2xl"
+          className="my-5 w-full max-w-xl rounded-2xl border border-line bg-panel p-6 shadow-xl"
         >
           <div className="flex justify-between">
             <div>
@@ -129,24 +133,41 @@ export function CreateTaskDialog({
             </label>
             <label className="field-label">
               Attachments{' '}
-              <span className="font-normal text-muted">(optional, up to 10 files / 20 MB)</span>
+              <span className="font-normal text-muted">
+                (optional, up to 10 files / 20 MB)
+              </span>
               <input
-                className={`${fieldClass} file:mr-3 file:rounded-lg file:border-0 file:bg-mint/10 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-mint`}
+                className={`${fieldClass} file:mr-3 file:rounded-lg file:border-0 file:bg-primary/10 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-primary`}
                 type="file"
                 multiple
                 accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.csv,.json,application/pdf,image/*,text/plain,text/markdown,text/csv,application/json"
                 onChange={(event) => {
                   const selected = Array.from(event.target.files ?? []);
-                  setAttachments((current) => [...current, ...selected].slice(0, 10));
+                  setAttachments((current) =>
+                    [...current, ...selected].slice(0, 10),
+                  );
                   event.target.value = '';
                 }}
               />
               {attachments.length > 0 && (
                 <span className="mt-2 grid gap-1.5">
                   {attachments.map((file, index) => (
-                    <span key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2 text-xs">
-                      <span className="truncate">{file.name} · {(file.size / 1024).toFixed(0)} KB</span>
-                      <button type="button" className="shrink-0 text-rose-300" onClick={() => setAttachments((items) => items.filter((_, i) => i !== index))}>
+                    <span
+                      key={`${file.name}-${index}`}
+                      className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2 text-xs"
+                    >
+                      <span className="truncate">
+                        {file.name} · {(file.size / 1024).toFixed(0)} KB
+                      </span>
+                      <button
+                        type="button"
+                        className="shrink-0 text-red-600"
+                        onClick={() =>
+                          setAttachments((items) =>
+                            items.filter((_, i) => i !== index),
+                          )
+                        }
+                      >
                         Remove
                       </button>
                     </span>
@@ -188,7 +209,7 @@ export function CreateTaskDialog({
                 ))}
               </select>
               {repoError && (
-                <span className="mt-1 block text-xs text-rose-300">
+                <span className="mt-1 block text-xs text-red-600">
                   {repoError}
                 </span>
               )}
@@ -223,7 +244,7 @@ export function CreateTaskDialog({
               </select>
             </label>
             {error && (
-              <p role="alert" className="text-sm text-rose-300">
+              <p role="alert" className="text-sm text-red-600">
                 {error}
               </p>
             )}

@@ -1,4 +1,45 @@
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone
+
+from app.models.task import Task, TaskStatus, TaskType
+from app.repositories.tasks import MemoryTaskRepository
+
+
+def test_task_repository_blocks_delete_for_active_validation_states() -> None:
+    async def scenario() -> None:
+        repo = MemoryTaskRepository()
+        now = datetime.now(timezone.utc)
+
+        for status in (TaskStatus.IN_PROGRESS, TaskStatus.VALIDATING):
+            task = Task(
+                id=f"task-{status.value.lower()}",
+                title="Active task",
+                description="This task is in active work.",
+                repository_key="nexus-core",
+                task_type=TaskType.BUGFIX,
+                status=status,
+                created_at=now,
+                updated_at=now,
+                created_by="operator",
+            )
+            await repo.create(task)
+            assert await repo.delete(task.id, expected_updated_at=task.updated_at) is False
+
+        task = Task(
+            id="task-backlog",
+            title="Backlog task",
+            description="This task can be deleted.",
+            repository_key="nexus-core",
+            task_type=TaskType.BUGFIX,
+            status=TaskStatus.BACKLOG,
+            created_at=now,
+            updated_at=now,
+            created_by="operator",
+        )
+        await repo.create(task)
+        assert await repo.delete(task.id, expected_updated_at=task.updated_at) is True
+
+    asyncio.run(scenario())
 
 
 def test_task_crud_and_pagination(api, create_task):

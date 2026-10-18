@@ -47,10 +47,14 @@ class AnalysisService:
             TaskStatus.FAILED,
             TaskStatus.BLOCKED,
             TaskStatus.AWAITING_INPUT,
+            TaskStatus.APPROVED,
+            TaskStatus.PR_CREATED,
+            TaskStatus.COMPLETED,
         }:
             raise NexusError(
                 ErrorCode.INVALID_TRANSITION,
-                "Only backlog, failed, or blocked tasks can be analyzed.",
+                "Only backlog, failed, blocked, awaiting-input, approved, published, "
+                "or completed tasks can be analyzed.",
                 status_code=409,
             )
         target = repository_target or self.settings.approved_repositories.get(task.repository_key)
@@ -59,15 +63,26 @@ class AnalysisService:
                 ErrorCode.REPOSITORY_NOT_ALLOWED, "Repository is not approved.", status_code=422
             )
         workflow = WorkflowService(self.tasks)
+        follow_up_reason = {
+            TaskStatus.APPROVED: "Follow-up analysis started for an approved task",
+            TaskStatus.PR_CREATED: "Follow-up analysis started for a published pull request",
+            TaskStatus.COMPLETED: "Follow-up analysis started for a completed task",
+        }.get(task.status)
         task = await workflow.transition(
             task,
             TaskStatus.ANALYZING,
             actor=actor,
-            reason="Analysis started",
+            reason=follow_up_reason or "Analysis started",
             trusted=True,
             updates=(
                 {"pending_question": None, "pending_execution_id": None}
-                if task.status == TaskStatus.AWAITING_INPUT
+                if task.status
+                in {
+                    TaskStatus.AWAITING_INPUT,
+                    TaskStatus.APPROVED,
+                    TaskStatus.PR_CREATED,
+                    TaskStatus.COMPLETED,
+                }
                 else None
             ),
         )

@@ -14,17 +14,48 @@ from app.core.errors import ErrorCode, NexusError
 from app.core.logging import redact_credentials
 from app.integrations.github import GitHubClient, GitHubOperationError
 from app.integrations.github_app import GitHubAppIntegration
-from app.integrations.workspace_artifact import download_workspace
 from app.integrations.validation_runner import compute_patch_fingerprint
+from app.integrations.workspace_artifact import download_workspace
 from app.models.task import TaskStatus, TransitionEvidence, TransitionEvidenceKind
 from app.repositories.records import WorkflowRepositories
 from app.repositories.tasks import TaskRepository
 from app.schemas.approval import ApprovalStatus
 from app.schemas.execution import ActivityEvent, ActivitySource
 from app.schemas.pull_request import PullRequestRecord, PullRequestStatus
-from app.services.coding_workspace import _run_git
+from app.services.coding_workspace import CodingWorkspaceError, _run_git
 from app.services.publication_gates import PublicationGate
 from app.services.workflow_service import WorkflowService
+
+_LEASE_SHA_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
+
+
+def _lease_push_args(branch: str, remote_listing: str) -> list[str]:
+    """Build git push args for a pull request branch.
+
+    The workspace clone is single-branch, so the pull request branch has no
+    remote-tracking counterpart and a bare ``--force-with-lease`` would wrongly
+    expect the branch to not exist on the remote. Use the branch's current
+    remote commit (from ``ls-remote``) as an explicit lease value instead: the
+    push replaces the branch's commit (a follow-up patch on the same pull
+    request) but is refused if the branch moved in the meantime. An empty
+    listing means the branch does not exist remotely yet (first publication),
+    so neither force nor a lease is needed.
+    """
+    for line in remote_listing.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == f"refs/heads/{branch}":
+            sha = parts[0]
+            if not _LEASE_SHA_PATTERN.fullmatch(sha):
+                raise CodingWorkspaceError(
+                    "GitHub returned an unexpected commit id for the pull request branch."
+                )
+            return [
+                "push",
+                f"--force-with-lease=refs/heads/{branch}:{sha}",
+                "origin",
+                f"HEAD:refs/heads/{branch}",
+            ]
+    return ["push", "origin", f"HEAD:refs/heads/{branch}"]
 
 
 class GitHubPRService:
@@ -42,7 +73,14 @@ class GitHubPRService:
         self.github_app = github_app
         self._lock = asyncio.Lock()
 
-    async def eligibility(self, task_id: str, execution_id: str) -> tuple[bool, str | None]:
+    async def eligibility(
+        self,
+        task_id: str,
+        execution_id: str,
+        *,
+        workspace_override: Path | None = None,
+        workspace_root_override: Path | None = None,
+    ) -> tuple[bool, str | None]:
         task = await self.tasks.get(task_id)
         if task is None:
             return False, "Task was not found."
@@ -56,7 +94,12 @@ class GitHubPRService:
             and self.github_app.configured
         ):
             return False, "GitHub token is not configured."
-        allowed, reason = await self.gate.check(task_id, execution_id)
+        allowed, reason = await self.gate.check(
+            task_id,
+            execution_id,
+            workspace_override=workspace_override,
+            workspace_root_override=workspace_root_override,
+        )
         if not allowed:
             return False, reason
         execution = await self.records.executions.get(execution_id)
@@ -92,11 +135,19 @@ class GitHubPRService:
                     Path(temporary) / "workspace",
                 )
                 return await self._create_locked(
-                    task_id, execution_id, workspace_override=workspace
+                    task_id,
+                    execution_id,
+                    workspace_override=workspace,
+                    workspace_root_override=Path(temporary),
                 )
 
     async def _create_locked(
-        self, task_id: str, execution_id: str, *, workspace_override: Path | None = None
+        self,
+        task_id: str,
+        execution_id: str,
+        *,
+        workspace_override: Path | None = None,
+        workspace_root_override: Path | None = None,
     ) -> PullRequestRecord:
         task = await self.tasks.get(task_id)
         execution = await self.records.executions.get(execution_id)
@@ -120,7 +171,12 @@ class GitHubPRService:
                 "A publication request is already in progress for this execution.",
                 status_code=409,
             )
-        eligible, reason = await self.eligibility(task_id, execution_id)
+        eligible, reason = await self.eligibility(
+            task_id,
+            execution_id,
+            workspace_override=workspace_override,
+            workspace_root_override=workspace_root_override,
+        )
         if not eligible:
             raise NexusError(
                 ErrorCode.PUBLICATION_BLOCKED,
@@ -231,10 +287,24 @@ class GitHubPRService:
                     raise GitHubOperationError(
                         "Execution branch no longer matches the saved commit."
                     )
+                # Follow-up patches reuse the pull request's branch, so the push
+                # replaces the branch's commit. Lease against the branch's current
+                # remote commit (the workspace clone is single-branch, so the pull
+                # request branch has no remote-tracking ref a bare lease could use)
+                # so the push is refused if anyone moved the branch since this
+                # workspace was prepared. First publications push without a lease.
+                branch = record.branch_name
+                remote_listing = await asyncio.to_thread(
+                    _run_git,
+                    operation_settings,
+                    ["ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
+                    cwd=workspace,
+                    token=True,
+                )
                 await asyncio.to_thread(
                     _run_git,
                     operation_settings,
-                    ["push", "origin", f"HEAD:refs/heads/{record.branch_name}"],
+                    _lease_push_args(branch, remote_listing),
                     cwd=workspace,
                     token=True,
                 )
@@ -278,18 +348,10 @@ class GitHubPRService:
                         pr = await client.find_pull_request(target, record.branch_name)
                         if pr is None:
                             raise
+                pr = await self._confirm_pushed_pull_request(client, target, pr, record)
                 expected_url = (
-                    f"https://github.com/{target.owner}/{target.repo}/pull/{pr.get('number')}"
+                    f"https://github.com/{target.owner}/{target.repo}/pull/{pr['number']}"
                 )
-                if (
-                    pr.get("state") != "open"
-                    or pr.get("head", {}).get("sha") != record.commit_sha
-                    or pr.get("html_url") != expected_url
-                    or not pr.get("number")
-                ):
-                    raise GitHubOperationError(
-                        "GitHub returned a pull request that did not match the pushed commit."
-                    )
                 updated_record = record.model_copy(
                     update={
                         "status": PullRequestStatus.CREATED,
@@ -370,7 +432,10 @@ class GitHubPRService:
         ):
             return
 
-        matches = []
+        # Follow-up executions reuse the published pull request's branch, so more
+        # than one execution record can reference the same pull request. Keep the
+        # newest record for the task; it represents the patch currently on the PR.
+        matches: dict[tuple[str, int], tuple] = {}
         for record in await self.records.pull_requests.list_all():
             if record.status not in {PullRequestStatus.CREATED, PullRequestStatus.MERGED}:
                 continue
@@ -385,11 +450,14 @@ class GitHubPRService:
                 and record.pr_url
                 == f"https://github.com/{target.owner}/{target.repo}/pull/{number}"
             ):
-                matches.append((record, task))
+                key = (record.task_id, number)
+                current = matches.get(key)
+                if current is None or record.updated_at >= current[0].updated_at:
+                    matches[key] = (record, task)
         if len(matches) != 1:
             return
 
-        record, task = matches[0]
+        record, task = next(iter(matches.values()))
         try:
             merged_time = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
         except ValueError:
@@ -519,6 +587,33 @@ class GitHubPRService:
         finally:
             if owned_client and client is not None:
                 await client.close()
+
+    async def _confirm_pushed_pull_request(
+        self, client, target, pr: dict, record, *, attempts: int = 4, delay: float = 2.0
+    ) -> dict:
+        """Confirm the pull request reflects the commit that was just pushed.
+
+        GitHub's pull-request listing can briefly serve the previous head
+        commit right after a force-push (a follow-up patch replaces the branch
+        commit), so a mismatching response is re-read from the fresher
+        single-pull-request endpoint a few times before giving up.
+        """
+        expected_url = f"https://github.com/{target.owner}/{target.repo}/pull/{pr.get('number')}"
+        for attempt in range(attempts):
+            if (
+                pr.get("state") == "open"
+                and pr.get("head", {}).get("sha") == record.commit_sha
+                and pr.get("html_url") == expected_url
+                and pr.get("number")
+            ):
+                return pr
+            if attempt == attempts - 1 or not pr.get("number"):
+                break
+            await asyncio.sleep(delay)
+            pr = await client.get_pull_request(target, int(pr["number"]))
+        raise GitHubOperationError(
+            "GitHub returned a pull request that did not match the pushed commit."
+        )
 
     async def _complete_task_for_merge(self, record, task) -> None:
         if task.status == TaskStatus.PR_CREATED and record.merge_commit_sha:

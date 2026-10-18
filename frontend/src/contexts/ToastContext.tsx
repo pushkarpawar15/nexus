@@ -31,7 +31,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             className="flex max-w-sm items-center gap-3 rounded-xl border border-line bg-panel px-4 py-3 shadow-xl"
           >
             <span
-              className={item.kind === 'error' ? 'text-rose-300' : 'text-mint'}
+              className={
+                item.kind === 'error' ? 'text-red-600' : 'text-primary'
+              }
             >
               {item.kind === 'success' ? (
                 <Check size={18} />

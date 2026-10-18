@@ -67,7 +67,14 @@ export function statusTone(status: string) {
   if (['COMPLETED', 'SUCCEEDED', 'APPROVED'].includes(status)) return 'success';
   if (['FAILED', 'REJECTED', 'BLOCKED', 'CANCELLED'].includes(status))
     return 'danger';
-  if (['AWAITING_APPROVAL', 'AWAITING_INPUT', 'SECURITY_REVIEW', 'HUMAN_QUEUE'].includes(status))
+  if (
+    [
+      'AWAITING_APPROVAL',
+      'AWAITING_INPUT',
+      'SECURITY_REVIEW',
+      'HUMAN_QUEUE',
+    ].includes(status)
+  )
     return 'warning';
   if (
     [

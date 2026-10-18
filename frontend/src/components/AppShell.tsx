@@ -44,11 +44,11 @@ export function AppShell() {
           ? 'Skills'
           : 'Command Center');
   return (
-    <div className="min-h-screen bg-canvas text-zinc-100">
+    <div className="min-h-screen bg-canvas text-slate-800">
       {drawer && (
         <button
           aria-label="Close navigation"
-          className="fixed inset-0 z-40 bg-black/70 lg:hidden"
+          className="fixed inset-0 z-40 bg-black/40 lg:hidden"
           onClick={() => setDrawer(false)}
         />
       )}
@@ -56,7 +56,7 @@ export function AppShell() {
         className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-line bg-panel px-4 py-5 transition-transform lg:translate-x-0 ${drawer ? 'translate-x-0' : '-translate-x-full'}`}
       >
         <div className="flex items-center gap-3 px-2">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-mint font-display font-bold text-canvas">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary font-display font-bold text-white">
             N
           </span>
           <span className="font-display text-lg font-bold tracking-[.22em]">
@@ -79,7 +79,7 @@ export function AppShell() {
               to={to}
               onClick={() => setDrawer(false)}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition ${isActive ? 'border-mint/20 bg-mint/10 text-mint' : 'border-transparent text-zinc-400 hover:bg-elevated hover:text-zinc-100'}`
+                `flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition ${isActive ? 'border-primary/20 bg-primary/10 text-primary' : 'border-transparent text-slate-500 hover:bg-elevated hover:text-slate-900'}`
               }
             >
               <Icon size={17} />
@@ -88,7 +88,9 @@ export function AppShell() {
           ))}
         </nav>
         <div className="mt-9 rounded-2xl border border-line bg-elevated p-4">
-          <p className="text-xs font-bold text-zinc-200">Operating principle</p>
+          <p className="text-xs font-bold text-slate-800">
+            Operating principle
+          </p>
           <p className="mt-2 font-display text-lg font-semibold">
             Human judgment stays in the loop.
           </p>
@@ -120,7 +122,7 @@ export function AppShell() {
               <BriefcaseBusiness size={13} className="mr-2" /> NEXUS workspace
             </span>
             {emulator && (
-              <span className="hidden rounded-full border border-cyan/30 px-2 py-1 text-[10px] text-cyan sm:inline-flex">
+              <span className="hidden rounded-full border border-cyan-300 px-2 py-1 text-[10px] text-cyan-700 sm:inline-flex">
                 Auth emulator
               </span>
             )}

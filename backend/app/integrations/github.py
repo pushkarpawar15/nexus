@@ -59,7 +59,13 @@ class GitHubClient:
         )
         if response.status_code != 200 or not isinstance(response.json(), list):
             raise GitHubOperationError("GitHub pull requests could not be listed.")
-        return response.json()[0] if response.json() else None
+        pull_requests = response.json()
+        # A follow-up patch reuses the pull request branch, so the same head
+        # branch can carry an older, closed pull request as well; publication
+        # must attach to the open one when it exists.
+        open_pull_requests = [pr for pr in pull_requests if pr.get("state") == "open"]
+        candidates = open_pull_requests or pull_requests
+        return candidates[0] if candidates else None
 
     async def get_pull_request(self, target: RepositoryTarget, number: int) -> dict:
         response = await self.client.get(f"/repos/{target.owner}/{target.repo}/pulls/{number}")
