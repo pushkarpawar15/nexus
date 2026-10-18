@@ -110,13 +110,18 @@ async def get_current_user(
     try:
         role = UserRole(role_claim)
     except (TypeError, ValueError):
-        if settings.environment == "production":
+        # Accounts that never received a nexus_role custom claim still get the
+        # configured default role, so new users can work after their first sign-in.
+        if settings.nexus_default_role:
+            role = UserRole(settings.nexus_default_role)
+        elif settings.environment == "production":
             raise NexusError(
                 ErrorCode.HTTP_ERROR,
                 "The account has no recognized NEXUS role.",
                 status_code=403,
             ) from None
-        role = UserRole.OPERATOR
+        else:
+            role = UserRole.OPERATOR
     email = claims.get("email")
     return UserIdentity(
         uid=uid,

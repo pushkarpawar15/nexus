@@ -137,6 +137,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("FIREBASE_AUTH_EMULATOR_HOST", "firebase_auth_emulator_host"),
     )
+    nexus_default_role: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_DEFAULT_ROLE", "nexus_default_role"),
+    )
     cors_origins_raw: str = Field(
         default="localhost", validation_alias=AliasChoices("CORS_ORIGINS", "cors_origins_raw")
     )
@@ -263,6 +267,18 @@ class Settings(BaseSettings):
         port = value.rpartition(":")[2] if ":" in value else ""
         if port and not 1 <= int(port) <= 65535:
             raise ValueError("emulator port must be between 1 and 65535")
+        return value
+
+    @field_validator("nexus_default_role")
+    @classmethod
+    def normalize_default_role(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().lower()
+        if not value:
+            return None
+        if value not in {"viewer", "operator", "admin"}:
+            raise ValueError("NEXUS_DEFAULT_ROLE must be 'viewer', 'operator' or 'admin'")
         return value
 
     @field_validator("approved_repositories")
