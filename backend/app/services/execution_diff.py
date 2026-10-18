@@ -67,7 +67,9 @@ def read_execution_diff(
                 cwd=resolved_workspace,
             )
             if status.strip() or head != pull_request.commit_sha:
-                raise ExecutionDiffError("Committed workspace no longer matches its saved checkpoint.")
+                raise ExecutionDiffError(
+                    "Committed workspace no longer matches its saved checkpoint."
+                )
             args = [
                 "diff",
                 "--binary",

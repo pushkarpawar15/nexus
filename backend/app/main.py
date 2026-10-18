@@ -81,8 +81,8 @@ from app.services.cloud_run_dispatcher import CloudRunJobsDispatcher
 from app.services.execution_pipeline import ExecutionPipeline, LocalExecutionDispatcher
 from app.services.execution_service import ExecutionService
 from app.services.github_pr_service import GitHubPRService
-from app.services.langgraph_workflow import AsyncFirestoreCheckpointer
 from app.services.model_catalog import model_choices
+from app.services.operator_input_workflow import FirestoreSessionService
 from app.services.skills import SkillService
 from app.services.task_mode_service import TaskModeService
 from app.services.task_plan_service import TaskPlanService
@@ -164,8 +164,8 @@ def create_app(
                     skills_repository=skills_repository,
                     github_connections=github_connections,
                     github_secret_store=github_secret_store,
-                    checkpointer=(
-                        AsyncFirestoreCheckpointer(client)
+                    session_service=(
+                        FirestoreSessionService(client)
                         if client is not None and runtime_settings.storage == "firestore"
                         else None
                     ),

@@ -1,0 +1,402 @@
+{
+  "meta": {
+    "timestamp": "2026-10-18T16:28:48+00:00",
+    "python": "3.11.17",
+    "platform": "Linux-6.6.10-76060610-generic-x86_64-with-glibc2.35",
+    "processor": "x86_64",
+    "storage": "in-memory adapters (NEXUS_ENV=testing)",
+    "server": "uvicorn 0.54.0 on localhost, single event loop"
+  },
+  "cold_start": {
+    "import_seconds": 0.695,
+    "app_factory_seconds": 0.042,
+    "first_healthy_response_seconds": 0.109,
+    "total_seconds": 0.846
+  },
+  "seeding": {
+    "tasks": 5000,
+    "seconds": 18.02,
+    "tasks_per_second": 277.5
+  },
+  "endpoints": [
+    {
+      "label": "Health probe",
+      "method": "GET",
+      "url": "/health",
+      "status_codes": [
+        200
+      ],
+      "samples": 50,
+      "mean_ms": 1.8,
+      "p50_ms": 1.73,
+      "p95_ms": 2.31,
+      "p99_ms": 3.39,
+      "max_ms": 3.39
+    },
+    {
+      "label": "Readiness probe",
+      "method": "GET",
+      "url": "/api/ready",
+      "status_codes": [
+        200
+      ],
+      "samples": 50,
+      "mean_ms": 3.2,
+      "p50_ms": 3.09,
+      "p95_ms": 4.07,
+      "p99_ms": 4.47,
+      "max_ms": 4.47
+    },
+    {
+      "label": "Model catalog",
+      "method": "GET",
+      "url": "/api/models",
+      "status_codes": [
+        200
+      ],
+      "samples": 200,
+      "mean_ms": 2.94,
+      "p50_ms": 2.63,
+      "p95_ms": 4.81,
+      "p99_ms": 5.1,
+      "max_ms": 5.59
+    },
+    {
+      "label": "Repository list",
+      "method": "GET",
+      "url": "/api/repositories",
+      "status_codes": [
+        200
+      ],
+      "samples": 200,
+      "mean_ms": 2.58,
+      "p50_ms": 2.33,
+      "p95_ms": 4.14,
+      "p99_ms": 5.04,
+      "max_ms": 6.3
+    },
+    {
+      "label": "Task list (25 of 5803)",
+      "method": "GET",
+      "url": "/api/tasks?limit=25",
+      "status_codes": [
+        200
+      ],
+      "samples": 200,
+      "mean_ms": 7.92,
+      "p50_ms": 7.58,
+      "p95_ms": 8.92,
+      "p99_ms": 11.79,
+      "max_ms": 62.12
+    },
+    {
+      "label": "Task create",
+      "method": "POST",
+      "url": "/api/tasks",
+      "status_codes": [
+        201
+      ],
+      "samples": 200,
+      "mean_ms": 3.05,
+      "p50_ms": 2.77,
+      "p95_ms": 5.12,
+      "p99_ms": 5.83,
+      "max_ms": 6.15
+    },
+    {
+      "label": "Task read",
+      "method": "GET",
+      "url": "/api/tasks/ebd2e72001ec4a378f40caf60881838c",
+      "status_codes": [
+        200
+      ],
+      "samples": 200,
+      "mean_ms": 3.55,
+      "p50_ms": 3.85,
+      "p95_ms": 4.74,
+      "p99_ms": 5.11,
+      "max_ms": 5.6
+    },
+    {
+      "label": "Task metadata update",
+      "method": "PATCH",
+      "url": "/api/tasks/ebd2e72001ec4a378f40caf60881838c",
+      "status_codes": [
+        200
+      ],
+      "samples": 200,
+      "mean_ms": 3.52,
+      "p50_ms": 3.22,
+      "p95_ms": 5.66,
+      "p99_ms": 6.22,
+      "max_ms": 6.55
+    },
+    {
+      "label": "Task history (empty)",
+      "method": "GET",
+      "url": "/api/tasks/ebd2e72001ec4a378f40caf60881838c/history",
+      "status_codes": [
+        200
+      ],
+      "samples": 200,
+      "mean_ms": 2.44,
+      "p50_ms": 2.42,
+      "p95_ms": 3.05,
+      "p99_ms": 3.26,
+      "max_ms": 3.73
+    },
+    {
+      "label": "Recent activity",
+      "method": "GET",
+      "url": "/api/activity?limit=50",
+      "status_codes": [
+        200
+      ],
+      "samples": 50,
+      "mean_ms": 148.29,
+      "p50_ms": 131.11,
+      "p95_ms": 189.72,
+      "p99_ms": 215.89,
+      "max_ms": 215.89
+    },
+    {
+      "label": "Skill list",
+      "method": "GET",
+      "url": "/api/skills",
+      "status_codes": [
+        200
+      ],
+      "samples": 200,
+      "mean_ms": 2.55,
+      "p50_ms": 2.43,
+      "p95_ms": 3.41,
+      "p99_ms": 4.42,
+      "max_ms": 5.32
+    },
+    {
+      "label": "Workflow transition (BACKLOG to BLOCKED)",
+      "method": "POST",
+      "url": "/api/tasks/{id}/transitions",
+      "status_codes": [
+        200
+      ],
+      "samples": 200,
+      "mean_ms": 3.55,
+      "p50_ms": 3.24,
+      "p95_ms": 5.81,
+      "p99_ms": 6.48,
+      "max_ms": 7.57
+    }
+  ],
+  "attachments": [
+    {
+      "samples": 5,
+      "mean_ms": 10.05,
+      "p50_ms": 8.73,
+      "p95_ms": 15.37,
+      "p99_ms": 15.37,
+      "max_ms": 15.37,
+      "label": "Attachment upload (1 MB)",
+      "method": "POST",
+      "url": "/api/tasks/{id}/attachments",
+      "status_codes": [
+        201
+      ],
+      "throughput_mb_per_s": 114.5
+    },
+    {
+      "samples": 5,
+      "mean_ms": 7.43,
+      "p50_ms": 7.09,
+      "p95_ms": 10.62,
+      "p99_ms": 10.62,
+      "max_ms": 10.62,
+      "label": "Attachment download (1 MB)",
+      "method": "GET",
+      "url": "/api/tasks/{id}/attachments/{attachment_id}",
+      "status_codes": [
+        200
+      ],
+      "throughput_mb_per_s": 141.0
+    },
+    {
+      "samples": 5,
+      "mean_ms": 77.57,
+      "p50_ms": 76.44,
+      "p95_ms": 92.7,
+      "p99_ms": 92.7,
+      "max_ms": 92.7,
+      "label": "Attachment upload (10 MB)",
+      "method": "POST",
+      "url": "/api/tasks/{id}/attachments",
+      "status_codes": [
+        201
+      ],
+      "throughput_mb_per_s": 130.8
+    },
+    {
+      "samples": 5,
+      "mean_ms": 30.42,
+      "p50_ms": 35.44,
+      "p95_ms": 39.36,
+      "p99_ms": 39.36,
+      "max_ms": 39.36,
+      "label": "Attachment download (10 MB)",
+      "method": "GET",
+      "url": "/api/tasks/{id}/attachments/{attachment_id}",
+      "status_codes": [
+        200
+      ],
+      "throughput_mb_per_s": 282.2
+    }
+  ],
+  "concurrency": {
+    "workers": 20,
+    "duration_seconds": 5.0,
+    "requests": 556,
+    "requests_per_second": 111.2,
+    "samples": 556,
+    "mean_ms": 179.69,
+    "p50_ms": 166.41,
+    "p95_ms": 249.82,
+    "p99_ms": 308.12,
+    "max_ms": 311.17
+  },
+  "dataset_scaling": [
+    {
+      "dataset": "100 tasks",
+      "task_list_first_page": {
+        "label": "Task list (limit=25)",
+        "method": "GET",
+        "url": "/api/tasks?limit=25",
+        "status_codes": [
+          200
+        ],
+        "samples": 100,
+        "mean_ms": 3.81,
+        "p50_ms": 3.4,
+        "p95_ms": 6.98,
+        "p99_ms": 7.82,
+        "max_ms": 8.45
+      },
+      "task_list_page_at_offset_200": {
+        "label": "Task list (limit=25, offset=200)",
+        "method": "GET",
+        "url": "/api/tasks?limit=25&offset=200",
+        "status_codes": [
+          200
+        ],
+        "samples": 100,
+        "mean_ms": 2.43,
+        "p50_ms": 2.39,
+        "p95_ms": 2.93,
+        "p99_ms": 3.17,
+        "max_ms": 3.21
+      },
+      "recent_activity": {
+        "label": "Recent activity (limit=50)",
+        "method": "GET",
+        "url": "/api/activity?limit=50",
+        "status_codes": [
+          200
+        ],
+        "samples": 50,
+        "mean_ms": 4.87,
+        "p50_ms": 4.81,
+        "p95_ms": 5.43,
+        "p99_ms": 5.56,
+        "max_ms": 5.56
+      }
+    },
+    {
+      "dataset": "1,000 tasks",
+      "task_list_first_page": {
+        "label": "Task list (limit=25)",
+        "method": "GET",
+        "url": "/api/tasks?limit=25",
+        "status_codes": [
+          200
+        ],
+        "samples": 100,
+        "mean_ms": 4.44,
+        "p50_ms": 4.0,
+        "p95_ms": 6.98,
+        "p99_ms": 7.49,
+        "max_ms": 7.65
+      },
+      "task_list_page_at_offset_200": {
+        "label": "Task list (limit=25, offset=200)",
+        "method": "GET",
+        "url": "/api/tasks?limit=25&offset=200",
+        "status_codes": [
+          200
+        ],
+        "samples": 100,
+        "mean_ms": 3.99,
+        "p50_ms": 3.88,
+        "p95_ms": 4.62,
+        "p99_ms": 4.74,
+        "max_ms": 7.01
+      },
+      "recent_activity": {
+        "label": "Recent activity (limit=50)",
+        "method": "GET",
+        "url": "/api/activity?limit=50",
+        "status_codes": [
+          200
+        ],
+        "samples": 50,
+        "mean_ms": 31.03,
+        "p50_ms": 26.03,
+        "p95_ms": 88.42,
+        "p99_ms": 88.85,
+        "max_ms": 88.85
+      }
+    },
+    {
+      "dataset": "5,000 tasks",
+      "task_list_first_page": {
+        "label": "Task list (limit=25)",
+        "method": "GET",
+        "url": "/api/tasks?limit=25",
+        "status_codes": [
+          200
+        ],
+        "samples": 100,
+        "mean_ms": 7.97,
+        "p50_ms": 7.89,
+        "p95_ms": 9.33,
+        "p99_ms": 10.24,
+        "max_ms": 10.24
+      },
+      "task_list_page_at_offset_200": {
+        "label": "Task list (limit=25, offset=200)",
+        "method": "GET",
+        "url": "/api/tasks?limit=25&offset=200",
+        "status_codes": [
+          200
+        ],
+        "samples": 100,
+        "mean_ms": 7.66,
+        "p50_ms": 7.55,
+        "p95_ms": 8.63,
+        "p99_ms": 10.03,
+        "max_ms": 11.01
+      },
+      "recent_activity": {
+        "label": "Recent activity (limit=50)",
+        "method": "GET",
+        "url": "/api/activity?limit=50",
+        "status_codes": [
+          200
+        ],
+        "samples": 50,
+        "mean_ms": 157.72,
+        "p50_ms": 125.13,
+        "p95_ms": 212.75,
+        "p99_ms": 228.04,
+        "max_ms": 228.04
+      }
+    }
+  ]
+}

@@ -243,7 +243,7 @@ class ExecutionService:
                 execution = await self.records.executions.get(task.pending_execution_id)
                 if execution is not None:
                     return execution
-            discard = getattr(self.dispatcher, "discard_input_checkpoint", None)
+            discard = getattr(self.dispatcher, "discard_input_session", None)
             if discard is not None:
                 await discard(task.pending_execution_id)
         task = await self.tasks.get(task.id) or saved_guidance

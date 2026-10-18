@@ -7,8 +7,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command
+from google.adk.sessions import InMemorySessionService
 from pydantic import SecretStr
 
 from app.core.config import Settings
@@ -32,7 +31,7 @@ from app.services.coding_workspace import (
     create_workspace,
 )
 from app.services.github_pr_service import GitHubPRService
-from app.services.langgraph_workflow import build_operator_input_graph
+from app.services.operator_input_workflow import OperatorInputWorkflow
 from app.services.security_service import SecurityService
 from app.services.skills import SkillService, skill_fingerprint
 from app.services.validation_service import ValidationService
@@ -111,26 +110,20 @@ class LocalExecutionDispatcher:
         future = self.pipeline._input_waiters.get(execution_id)
         if future is None or future.done():
             return False
-        graph_result = await self.pipeline._operator_input_graph.ainvoke(
-            Command(resume=answer),
-            {"configurable": {"thread_id": execution_id}},
+        resumed_answer = await self.pipeline._operator_input.provide_answer(
+            execution_id, answer
         )
-        resumed_answer = graph_result.get("answer")
-        if not isinstance(resumed_answer, str) or not resumed_answer.strip():
-            raise ValueError("LangGraph did not return the operator's answer.")
         future.set_result(resumed_answer)
         return True
 
-    async def discard_input_checkpoint(self, execution_id: str) -> None:
-        delete_thread = getattr(self.pipeline._operator_input_checkpointer, "adelete_thread", None)
-        if delete_thread is not None:
-            try:
-                await delete_thread(execution_id)
-            except Exception:
-                logger.exception(
-                    "Could not remove abandoned LangGraph checkpoints (execution_id=%s)",
-                    execution_id,
-                )
+    async def discard_input_session(self, execution_id: str) -> None:
+        try:
+            await self.pipeline._operator_input.discard(execution_id)
+        except Exception:
+            logger.exception(
+                "Could not remove the abandoned operator-input session (execution_id=%s)",
+                execution_id,
+            )
 
     async def close(self) -> None:
         for execution_id in tuple(self._tasks):
@@ -150,7 +143,7 @@ class ExecutionPipeline:
         attachment_storage=None,
         github_app: GitHubAppIntegration | None = None,
         github_pr_service: GitHubPRService | None = None,
-        checkpointer=None,
+        session_service=None,
         skills_repository: SkillRepository | None = None,
         github_connections: GitHubConnectionRepository | None = None,
         github_secret_store: GitHubSecretStore | None = None,
@@ -172,8 +165,9 @@ class ExecutionPipeline:
         )
         self._workspace_stop_events: dict[str, threading.Event] = {}
         self._input_waiters: dict[str, asyncio.Future[str]] = {}
-        self._operator_input_checkpointer = checkpointer or InMemorySaver()
-        self._operator_input_graph = build_operator_input_graph(self._operator_input_checkpointer)
+        self._operator_input = OperatorInputWorkflow(
+            session_service or InMemorySessionService()
+        )
 
     async def run(self, execution_id: str) -> None:
         execution = await self.records.executions.get(execution_id)
@@ -810,18 +804,16 @@ class ExecutionPipeline:
             self._execution_validators.pop(execution.id, None)
             self._execution_pr_services.pop(execution.id, None)
             current_execution = await self.records.executions.get(execution.id)
-            delete_thread = getattr(self._operator_input_checkpointer, "adelete_thread", None)
             if (
                 current_execution
                 and current_execution.status
                 not in {ExecutionStatus.QUEUED, ExecutionStatus.RUNNING}
-                and delete_thread is not None
             ):
                 try:
-                    await delete_thread(execution.id)
+                    await self._operator_input.discard(execution.id)
                 except Exception:
                     logger.exception(
-                        "Could not remove completed LangGraph checkpoints (execution_id=%s)",
+                        "Could not remove the completed operator-input session (execution_id=%s)",
                         execution.id,
                     )
 
@@ -837,10 +829,7 @@ class ExecutionPipeline:
         future = asyncio.get_running_loop().create_future()
         self._input_waiters[execution.id] = future
         try:
-            await self._operator_input_graph.ainvoke(
-                {"question": question, "answer": None},
-                {"configurable": {"thread_id": execution.id}},
-            )
+            await self._operator_input.request_answer(execution.id, question)
             await WorkflowService(self.tasks).transition(
                 task,
                 TaskStatus.AWAITING_INPUT,
