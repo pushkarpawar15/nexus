@@ -13,8 +13,8 @@ The React/Vite app has the workflow routes, Firebase sign-in and role context, a
 | Web app | React + TypeScript + Vite, Firebase Hosting | Task intake, execution progress, evidence, approval and review experience. |
 | API | Python + FastAPI, Cloud Run | Authentication, configuration, task intake, workflow coordination and status reads. |
 | Model access | Gemini through Vertex AI or Gemini API | Structured analysis, contextual security findings, and schema-constrained coding proposals. |
-| Agent orchestration | NEXUS workflow services and LangGraph | NEXUS services own task transitions and side effects; LangGraph checkpoints human-input interrupts; the coding adapter returns bounded file operations through Vertex AI structured output. |
-| Durable workflow state | Firestore | Tasks, executions, activity, validation/security reports, approvals, PR records and LangGraph checkpoints. |
+| Agent orchestration | NEXUS workflow services and Google ADK | NEXUS services own task transitions and side effects; an ADK human-input workflow pauses operator questions and persists the pause in Firestore sessions; the coding adapter returns bounded file operations through Vertex AI structured output. |
+| Durable workflow state | Firestore | Tasks, executions, activity, validation/security reports, approvals, PR records and ADK operator-input sessions. |
 | Coding and validation | Isolated local worker and prebuilt Docker validators | Disposable workspaces, bounded checks, actual test evidence. |
 | PR publication | GitHub App and GitHub API | Publish approved, validated changes to repositories selected during installation. |
 | Task attachments | Local private storage or Google Cloud Storage | Store bounded attachments and provide authorized download and model access. |
@@ -35,7 +35,7 @@ The Firestore adapters use these top-level collection names:
 | `security_reviews` | Static/model findings and patch fingerprint. |
 | `approvals` | Immutable, patch-specific human decisions. |
 | `pull_requests` | Commit, push and confirmed PR checkpoints. |
-| `langgraph_checkpoints` | Checkpoints for operator-input interrupts and resumes, partitioned by execution thread. |
+| `adk_sessions` | ADK sessions that persist operator-input questions and answers, one document per execution. |
 
 The app factory selects Firestore explicitly outside test mode. A Firestore connectivity failure is surfaced by `/api/ready`; it never falls back to memory. Memory adapters are restricted to `NEXUS_ENV=testing`.
 
@@ -51,9 +51,9 @@ The app factory selects Firestore explicitly outside test mode. A Firestore conn
 - **Approval is required:** validation and security must pass first. The existing admin approval gate remains in place before PR creation.
 - **Published pull request follow-up:** after manual testing, an operator can ask for a fix or provide more information while the task is in `PR_CREATED` (or in `APPROVED`, e.g. when publication failed before a pull request was created). The answer is saved as operator guidance tagged with the follow-up intent and the task reopens through `PR_CREATED → ANALYZING` or `APPROVED → ANALYZING` (trusted, planner-only transitions); the planner re-analyzes with the new instructions. A follow-up execution reuses the task's latest pull request branch (including branches from publications that failed mid-way), and after fresh validation, security review, and an approval for the new patch fingerprint, publication pushes the new commit to that branch with `--force-with-lease` (leased against the branch's current remote commit from `ls-remote`) so the open pull request is updated instead of a second one being created; the pull request is then confirmed with a short re-read loop, because GitHub's pull-request listing can briefly serve the pre-push head commit right after a force-push. The merge webhook completes the task from the newest execution record that references the pull request. The input endpoint also still reopens a `COMPLETED` task for a fresh attempt with accumulated guidance.
 
-After a bounded repair window, the task enters `AWAITING_INPUT`. The task page shows the question and related validation or security evidence. An operator answer is saved as coder guidance and shown in activity details. For an active local worker, LangGraph pauses at an interrupt and checkpoints it in Firestore; the answer resumes the same execution and workspace. If the local worker stops, the answer starts a fresh execution because an uncommitted local workspace cannot survive process shutdown.
+After a bounded repair window, the task enters `AWAITING_INPUT`. The task page shows the question and related validation or security evidence. An operator answer is saved as coder guidance and shown in activity details. For an active local worker, the Google ADK workflow pauses at a human-input node and persists the pause in a Firestore session; the answer resumes the same execution and workspace. If the local worker stops, the answer starts a fresh execution because an uncommitted local workspace cannot survive process shutdown.
 
-The workflow activity and typed task/execution records remain the user-facing evidence. LangGraph checkpoints store execution-control state, not a replacement for those records.
+The workflow activity and typed task/execution records remain the user-facing evidence. ADK sessions store execution-control state, not a replacement for those records.
 
 ## Trust boundaries
 

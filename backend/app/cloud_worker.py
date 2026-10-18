@@ -23,7 +23,7 @@ from app.schemas.execution import ExecutionStatus
 from app.schemas.pull_request import PullRequestStatus
 from app.services.execution_pipeline import ExecutionPipeline
 from app.services.github_pr_service import GitHubPRService
-from app.services.langgraph_workflow import AsyncFirestoreCheckpointer
+from app.services.operator_input_workflow import FirestoreSessionService
 from app.services.validation_service import ValidationService
 
 
@@ -94,7 +94,7 @@ async def run_worker() -> None:
             attachment_storage=attachment_storage,
             github_app=github_app,
             github_pr_service=github_pr_service,
-            checkpointer=AsyncFirestoreCheckpointer(client),
+            session_service=FirestoreSessionService(client),
             skills_repository=FirestoreSkillRepository(client),
         )
         loop = asyncio.get_running_loop()
