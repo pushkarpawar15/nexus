@@ -406,6 +406,14 @@ def create_app(
                 status_code=403,
             )
 
+    @app.get("/api/me")
+    async def get_current_identity(
+        user: UserIdentity = Depends(require_viewer),
+    ) -> dict[str, str | None]:
+        # The UI mirrors the effective role so accounts that rely on
+        # NEXUS_DEFAULT_ROLE instead of a nexus_role claim still see the right gates.
+        return {"uid": user.uid, "email": user.email, "role": user.role.value}
+
     @app.get("/api/models")
     async def get_model_choices(_: UserIdentity = Depends(require_viewer)):
         return model_choices(runtime_settings)

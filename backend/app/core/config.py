@@ -138,7 +138,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("FIREBASE_AUTH_EMULATOR_HOST", "firebase_auth_emulator_host"),
     )
     nexus_default_role: str | None = Field(
-        default=None,
+        default="admin",
         validation_alias=AliasChoices("NEXUS_DEFAULT_ROLE", "nexus_default_role"),
     )
     cors_origins_raw: str = Field(

@@ -5,11 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.core.auth import UserIdentity, UserRole, get_current_user
 from app.core.config import Settings
 from app.core.errors import NexusError
+from app.main import create_app
 
 
 def _settings(**overrides) -> Settings:
@@ -35,7 +37,20 @@ def _identity(claims: dict, settings: Settings) -> UserIdentity:
     return asyncio.run(get_current_user(request, credentials, settings))
 
 
-def test_default_role_applies_when_the_claim_is_missing() -> None:
+def _client(settings: Settings, claims: dict) -> TestClient:
+    app = create_app(settings=settings)
+    app.state.firebase_token_verifier = lambda _token, _settings: claims
+    return TestClient(app)
+
+
+def test_unset_default_role_is_admin_so_new_users_get_every_feature() -> None:
+    settings = _settings()
+
+    assert settings.nexus_default_role == "admin"
+    assert _identity({"uid": "new-user"}, settings).role is UserRole.ADMIN
+
+
+def test_configured_default_role_replaces_the_built_in_default() -> None:
     settings = _settings(nexus_default_role="viewer")
     assert _identity({"uid": "new-user"}, settings).role is UserRole.VIEWER
 
@@ -52,20 +67,16 @@ def test_unrecognized_claim_falls_back_to_the_default_role() -> None:
     assert identity.role is UserRole.OPERATOR
 
 
-def test_production_default_role_grants_access() -> None:
-    settings = _settings(
-        environment="production",
-        storage="firestore",
-        nexus_default_role="admin",
-    )
+def test_production_grants_the_default_admin_role() -> None:
+    settings = _settings(environment="production", storage="firestore")
     assert _identity({"uid": "new-user"}, settings).role is UserRole.ADMIN
 
 
-def test_production_rejects_users_without_claim_or_default() -> None:
+def test_production_rejects_users_when_the_default_role_is_disabled() -> None:
     settings = _settings(
         environment="production",
         storage="firestore",
-        nexus_default_role=None,
+        nexus_default_role="",
     )
     with pytest.raises(NexusError) as excinfo:
         _identity({"uid": "new-user"}, settings)
@@ -82,20 +93,65 @@ def test_blank_default_role_is_normalized_to_no_default() -> None:
     assert _settings(nexus_default_role="  ").nexus_default_role is None
 
 
-def test_default_role_gates_api_endpoints() -> None:
-    from fastapi.testclient import TestClient
+def test_me_endpoint_reports_the_default_admin_role() -> None:
+    client = _client(_settings(), {"uid": "new-user", "email": "new@example.com"})
 
-    from app.main import create_app
+    response = client.get("/api/me", headers={"Authorization": "Bearer token"})
 
-    settings = _settings(
-        firebase_project_id="demo-nexus",
-        cors_origins_raw="http://localhost:5173",
-        approved_repositories={"sample": {"owner": "example-org", "repo": "sample"}},
-        nexus_default_role="viewer",
+    assert response.status_code == 200
+    assert response.json() == {
+        "uid": "new-user",
+        "email": "new@example.com",
+        "role": "admin",
+    }
+
+
+def test_me_endpoint_prefers_the_role_claim() -> None:
+    client = _client(
+        _settings(nexus_default_role="viewer"),
+        {"uid": "admin-user", "nexus_role": "admin"},
     )
-    app = create_app(settings=settings)
-    app.state.firebase_token_verifier = lambda _token, _settings: {"uid": "new-user"}
-    client = TestClient(app)
+
+    response = client.get("/api/me", headers={"Authorization": "Bearer token"})
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "admin"
+
+
+def test_default_role_reaches_admin_only_endpoints() -> None:
+    client = _client(_settings(), {"uid": "new-user"})
+
+    response = client.post(
+        "/api/tasks/missing-task/executions/missing-execution/approval",
+        headers={"Authorization": "Bearer token"},
+        json={"status": "APPROVED", "reason": "Ship it"},
+    )
+
+    # Authorization passed; the unknown task is the only failure.
+    assert response.status_code == 404
+
+
+def test_viewer_default_role_is_blocked_from_admin_only_endpoints() -> None:
+    client = _client(_settings(nexus_default_role="viewer"), {"uid": "new-user"})
+
+    response = client.post(
+        "/api/tasks/missing-task/executions/missing-execution/approval",
+        headers={"Authorization": "Bearer token"},
+        json={"status": "APPROVED", "reason": "Ship it"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_viewer_default_role_still_gates_operator_endpoints() -> None:
+    client = _client(
+        _settings(
+            cors_origins_raw="http://localhost:5173",
+            approved_repositories={"sample": {"owner": "example-org", "repo": "sample"}},
+            nexus_default_role="viewer",
+        ),
+        {"uid": "new-user"},
+    )
     headers = {"Authorization": "Bearer token"}
 
     # Viewers may read repositories but may not create tasks.

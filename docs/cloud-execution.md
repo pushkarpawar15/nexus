@@ -36,6 +36,8 @@ gcloud artifacts repositories create nexus \
 
 The project must already have a Firestore database and Firebase Authentication configured. Add the Firebase Hosting domain to Firebase Authentication's authorized domains and configure the Google sign-in provider in Firebase Console.
 
+Authorization comes from the `nexus_role` custom claim (`viewer`, `operator`, or `admin`). Accounts without that claim receive `NEXUS_DEFAULT_ROLE`, which defaults to `admin` so a new user can use every feature right after signing in. Set `NEXUS_DEFAULT_ROLE=viewer` or `operator` on the API service for narrower default access, or set it to an empty value to require an explicit claim for every account.
+
 ## 3. Create separate service identities
 
 ```sh

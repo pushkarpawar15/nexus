@@ -79,6 +79,13 @@ const q = (values: Record<string, string | number | undefined>) => {
   return `?${params}`;
 };
 const id = (value: string) => encodeURIComponent(value);
+export interface CurrentIdentity {
+  uid: string;
+  email?: string | null;
+  role: 'viewer' | 'operator' | 'admin';
+}
+export const getCurrentIdentity = (u: User | null, signal?: AbortSignal) =>
+  request<CurrentIdentity>(u, '/api/me', signal ? { signal } : {});
 export interface ConnectedRepository {
   key: string;
   label: string;

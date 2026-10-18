@@ -56,7 +56,7 @@ The app includes task and workflow views, GitHub App repository connection, atta
 - `NEXUS_STORAGE` is required. `memory` is permitted only with `NEXUS_ENV=testing`; development and production use Firestore.
 - Production requires Firestore, Google and Firebase project IDs, and either an approved repository map or a configured GitHub App. Emulator hosts and local execution flags are rejected in production.
 - The Cloud Run service identity needs `roles/firebaseauth.viewer` in the Firebase project because production ID-token verification checks revocation status. Enable the Identity Toolkit API if it is not already enabled. Verification dependency errors are logged with their exception type to distinguish a missing permission/API from an invalid token.
-- `NEXUS_DEFAULT_ROLE` (`viewer`, `operator`, or `admin`) grants a role to accounts that sign in without a `nexus_role` custom claim, so new users can work after their first sign-in. A `nexus_role` claim always wins; without either, production requests are rejected with 403.
+- `NEXUS_DEFAULT_ROLE` (`viewer`, `operator`, or `admin`, default `admin`) grants a role to accounts that sign in without a `nexus_role` custom claim, so new users reach every feature immediately; a `nexus_role` claim always wins. Set it to `viewer` or `operator` for narrower access, or to an empty value to reject accounts that have no claim.
 - GitHub App access is server-side. Repository choices come from repositories selected during the GitHub installation.
 - `WORKSPACE_ROOT` must be outside both the NEXUS checkout and the target checkout when local execution is enabled.
 - Keep GitHub and Gemini credentials backend-only. Use ADC locally and a narrowly scoped service identity when deployed.

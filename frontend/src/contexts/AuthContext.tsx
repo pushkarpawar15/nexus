@@ -9,8 +9,11 @@ import {
   type User,
 } from 'firebase/auth';
 import { auth, authEmulator, firebaseConfigured } from '../lib/firebase';
+import { getCurrentIdentity } from '../lib/api';
 
 import { AuthContext, type AuthValue } from './authState';
+const isRole = (value: unknown): value is 'viewer' | 'operator' | 'admin' =>
+  value === 'viewer' || value === 'operator' || value === 'admin';
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<'viewer' | 'operator' | 'admin' | null>(
@@ -25,13 +28,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       else {
         try {
           const claim = (await next.getIdTokenResult()).claims.nexus_role;
-          setRole(
-            claim === 'viewer' || claim === 'operator' || claim === 'admin'
-              ? claim
-              : import.meta.env.PROD
-                ? null
-                : 'operator',
-          );
+          if (isRole(claim)) setRole(claim);
+          else {
+            // No custom claim yet: the API applies NEXUS_DEFAULT_ROLE, so mirror
+            // the effective role it reports instead of guessing.
+            try {
+              const identity = await getCurrentIdentity(next);
+              setRole(isRole(identity.role) ? identity.role : null);
+            } catch {
+              setRole(import.meta.env.PROD ? null : 'operator');
+            }
+          }
         } catch {
           setRole(import.meta.env.PROD ? null : 'operator');
         }
